@@ -107,16 +107,16 @@ sequence_length = 100
 output_sequence_length = 50
 
 # Transformer隐藏维度
-d_model = 256
+d_model = 128
 
 # 注意力头数
 nhead = 8
 
 # Encoder层数
-num_encoder_layers = 4
+num_encoder_layers = 3
 
 # 前馈网络维度
-dim_feedforward = 1024
+dim_feedforward = 512
 
 # Transformer的dropout
 transformer_dropout = 0.1
@@ -153,7 +153,7 @@ num_epochs = 2000
 batch_size = 32
 
 # 测试批次大小（可以与训练批次大小不同）
-test_batch_size = 32
+test_batch_size = 2048
 
 # 学习率
 learning_rate = 0.001
