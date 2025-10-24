@@ -1,0 +1,18 @@
+# 忽略 data 文件夹（包括所有子文件夹和文件）
+data/
+
+# 忽略 logs 文件夹（包括所有子文件夹和文件）
+logs/
+
+# 其他常见的需要忽略的文件
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+.env
+.DS_Store
+.ipynb_checkpoints

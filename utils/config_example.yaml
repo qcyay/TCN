@@ -1,0 +1,103 @@
+# 运动数据可视化配置文件 (v3.3 简化版)
+
+# ==================== 路径配置 ====================
+data_root: "./data"
+
+# ==================== 数据选择 ====================
+subjects:
+  - subject1
+  - subject2
+
+motions:
+  - walking
+
+# ==================== 文件类型选择 ====================
+# 可以选择一种或多种文件类型
+#
+# 单选示例：
+#   file_types: ["exo"]     # 只显示传感器数据
+#   file_types: ["moment"]  # 只显示力矩数据
+#
+# 多选示例：
+#   file_types: ["exo", "moment"]  # 同时显示两种数据
+#
+file_types: ["exo", "moment"]
+
+# ==================== 参数选择 ====================
+# 要可视化的数据列
+# 每个参数将独立显示在一个子图中
+#
+# 可以同时包含来自不同文件类型的参数
+columns:
+  - hip_flexion_l          # 来自 exo
+  - hip_flexion_l_moment   # 来自 moment
+  - knee_angle_l           # 来自 exo
+  - knee_angle_l_moment    # 来自 moment
+
+# ==================== 显示选项 ====================
+# 时间对齐：将所有曲线的起始时间设为0
+align_time: true
+
+# ==================== 输出配置 ====================
+save_path: "visualization_output.html"
+
+# ==================== 显示效果 ====================
+#
+# 使用上述配置时，将生成4个子图：
+#
+#   子图1: hip_flexion_l (传感器数据)
+#     - subject1-walking (蓝色实线)
+#     - subject2-walking (橙色实线)
+#
+#   子图2: hip_flexion_l_moment (力矩数据)
+#     - subject1-walking (蓝色实线)
+#     - subject2-walking (橙色实线)
+#
+#   子图3: knee_angle_l (传感器数据)
+#     - subject1-walking (蓝色实线)
+#     - subject2-walking (橙色实线)
+#
+#   子图4: knee_angle_l_moment (力矩数据)
+#     - subject1-walking (蓝色实线)
+#     - subject2-walking (橙色实线)
+
+# ==================== 配置示例 ====================
+
+# 示例1: 只看传感器数据
+# file_types: ["exo"]
+# columns:
+#   - hip_flexion_l
+#   - knee_angle_l
+#   - ankle_angle_l
+# 结果：3个子图，每个显示传感器数据
+
+# 示例2: 只看力矩数据
+# file_types: ["moment"]
+# columns:
+#   - hip_flexion_l_moment
+#   - knee_angle_l_moment
+#   - ankle_angle_l_moment
+# 结果：3个子图，每个显示力矩数据
+
+# 示例3: 同时看两种数据
+# file_types: ["exo", "moment"]
+# columns:
+#   - hip_flexion_l
+#   - hip_flexion_l_moment
+# 结果：2个子图，分别显示传感器和力矩
+
+# 示例4: 多人多运动对比
+# subjects: [subject1, subject2, subject3]
+# motions: [walking, running]
+# file_types: ["exo"]
+# columns:
+#   - hip_flexion_l
+# 结果：1个子图，包含6条曲线（3人×2运动）
+
+# ==================== 使用说明 ====================
+#
+# 命令行运行：
+#   python motion_data_visualizer.py --config config.yaml
+#
+# 交互式运行（推荐）：
+#   streamlit run motion_data_visualizer.py -- --data_root "./data" --interactive

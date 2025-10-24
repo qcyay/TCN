@@ -1,0 +1,426 @@
+
+████████████████████████████████████████████████████████████████████████████████
+                                  TCN 数据集分析工具                                   
+████████████████████████████████████████████████████████████████████████████████
+
+分析时间: 2025-10-16 17:57:01
+数据目录: data
+
+正在扫描数据集...
+
+================================================================================
+                                     整体统计摘要                                     
+================================================================================
+
+指标                                       TRAIN            TEST              总计
+---------------------------------------------------------------------------
+运动形式数量                                      26              26              52
+运动类型数量                                      55              26              81
+试验数量                                       551             260             811
+
+================================================================================
+                                    数据集对比分析                                     
+================================================================================
+
+【运动形式对比】
+  共同的运动形式: 26
+    ball_toss, curb_down, curb_up, cutting, dynamic_walk, incline_walk, jump, lift_weight, lunges, meander, normal_walk, obstacle_walk, poses, push, side_shuffle, sit_to_stand, squats, stairs, start_stop, step_ups, tire_run, tug_of_war, turn_and_step, twister, walk_backward, weighted_walk
+
+  仅在TRAIN中的运动形式: 0
+
+  仅在TEST中的运动形式: 0
+
+
+────────────────────────────────────────────────────────────────────────────────
+【各运动形式的类型对比】
+────────────────────────────────────────────────────────────────────────────────
+
+运动形式: ball_toss
+  共同类型: on
+  仅TRAIN有: off
+
+运动形式: curb_down
+  共同类型: on
+  仅TRAIN有: off
+
+运动形式: curb_up
+  共同类型: on
+  仅TRAIN有: off
+
+运动形式: cutting
+  共同类型: on
+  仅TRAIN有: off
+
+运动形式: dynamic_walk
+  共同类型: on
+  仅TRAIN有: off
+
+运动形式: incline_walk
+  共同类型: on
+  仅TRAIN有: incline_walk_up10_hilo, incline_walk_up5_hilo, off
+
+运动形式: jump
+  共同类型: on
+  仅TRAIN有: off
+
+运动形式: lift_weight
+  共同类型: on
+  仅TRAIN有: off
+
+运动形式: lunges
+  共同类型: on
+  仅TRAIN有: off
+
+运动形式: meander
+  共同类型: on
+  仅TRAIN有: off
+
+运动形式: normal_walk
+  共同类型: on
+  仅TRAIN有: normal_walk_hilo, off
+
+运动形式: obstacle_walk
+  共同类型: on
+  仅TRAIN有: off
+
+运动形式: poses
+  共同类型: on
+  仅TRAIN有: off
+
+运动形式: push
+  共同类型: on
+  仅TRAIN有: off
+
+运动形式: side_shuffle
+  共同类型: on
+  仅TRAIN有: off
+
+运动形式: sit_to_stand
+  共同类型: on
+  仅TRAIN有: off
+
+运动形式: squats
+  共同类型: on
+  仅TRAIN有: off
+
+运动形式: stairs
+  共同类型: on
+  仅TRAIN有: off
+
+运动形式: start_stop
+  共同类型: on
+  仅TRAIN有: off
+
+运动形式: step_ups
+  共同类型: on
+  仅TRAIN有: off
+
+运动形式: tire_run
+  共同类型: on
+  仅TRAIN有: off
+
+运动形式: tug_of_war
+  共同类型: on
+  仅TRAIN有: off
+
+运动形式: turn_and_step
+  共同类型: on
+  仅TRAIN有: off
+
+运动形式: twister
+  共同类型: on
+  仅TRAIN有: off
+
+运动形式: walk_backward
+  共同类型: on
+  仅TRAIN有: off
+
+运动形式: weighted_walk
+  共同类型: on
+  仅TRAIN有: off
+
+
+────────────────────────────────────────────────────────────────────────────────
+【运动模式文件夹名称对比】
+────────────────────────────────────────────────────────────────────────────────
+
+共同的运动模式文件夹: 70
+  (共 70 个，仅显示前20个)
+  • ball_toss_1_1_center_on
+  • ball_toss_1_1_left_on
+  • ball_toss_1_1_right_on
+  • curb_down_1_1_on
+  • curb_up_1_1_on
+  • cutting_1_1_left-fast_on
+  • cutting_1_1_left-slow_on
+  • cutting_1_1_right-fast_on
+  • cutting_1_1_right-slow_on
+  • dynamic_walk_1_1_butt-kicks_on
+  • dynamic_walk_1_1_heel-walk_on
+  • dynamic_walk_1_1_high-knees_on
+  • dynamic_walk_1_1_toe-walk_on
+  • incline_walk_1_1_down5_on
+  • incline_walk_1_1_up5_on
+  • incline_walk_2_1_down10_on
+  • incline_walk_2_1_up10_on
+  • jump_1_1_fb_on
+  • jump_1_1_hop_on
+  • jump_1_1_vertical_on
+
+仅在TRAIN中的运动模式文件夹: 211
+  • ball_toss_1_2_center_off
+  • ball_toss_1_2_left_off
+  • ball_toss_1_2_right_off
+  • ball_toss_1_center_on
+  • ball_toss_1_left_on
+  • ball_toss_1_right_on
+  • curb_down_1_2_off
+  • curb_down_1_on
+  • curb_up_1_2_off
+  • curb_up_1_on
+  • cutting_1_left-fast_off
+  • cutting_1_left-slow_off
+  • cutting_1_right-fast_off
+  • cutting_1_right-slow_off
+  • dynamic_walk_1_2_butt-kicks_off
+  • dynamic_walk_1_2_heel-walk_off
+  • dynamic_walk_1_2_high-knees_off
+  • dynamic_walk_1_2_toe-walk_off
+  • dynamic_walk_1_butt-kicks_on
+  • dynamic_walk_1_high-knees_on
+  • dynamic_walk_2_butt-kicks_off
+  • dynamic_walk_2_heel-walk_off
+  • dynamic_walk_2_high-knees_off
+  • dynamic_walk_2_toe-walk_off
+  • incline_walk_1_2_down10_on
+  • incline_walk_1_2_down5_off
+  • incline_walk_1_2_up10_on
+  • incline_walk_1_2_up5_off
+  • incline_walk_1_3_up10_hilo
+  • incline_walk_1_3_up5_hilo
+  • incline_walk_2_2_down10_off
+  • incline_walk_2_2_up10_off
+  • incline_walk_2_3_up10_hilo
+  • incline_walk_2_4_down10_on
+  • incline_walk_3_1_up5_on
+  • incline_walk_3_down5_on
+  • incline_walk_3_up5_on
+  • incline_walk_4_1_down5_on
+  • incline_walk_4_down5_off
+  • incline_walk_4_up5_off
+  • incline_walk_5_down10_on
+  • incline_walk_5_up10_on
+  • incline_walk_6_down10_off
+  • incline_walk_6_up10_off
+  • jump_1_2_fb_off
+  • jump_1_2_hop_off
+  • jump_1_2_vertical_off
+  • jump_1_fb_on
+  • jump_1_hop_on
+  • jump_1_vertical_on
+  • jump_2_180_on
+  • jump_2_2_180_off
+  • jump_2_2_lateral_off
+  • jump_2_lateral_on
+  • jump_3_2_90-f_off
+  • jump_3_2_90-s_off
+  • jump_3_90-f_on
+  • jump_3_90-s_on
+  • lift_weight_1_25lbs-l-c_on
+  • lift_weight_1_25lbs-l-l_on
+  • lift_weight_1_25lbs-r-c_on
+  • lift_weight_1_25lbs-r-r_on
+  • lift_weight_1_2_25lbs-l-c_off
+  • lift_weight_1_2_25lbs-l-l_off
+  • lift_weight_1_2_25lbs-r-c_off
+  • lift_weight_1_2_25lbs-r-r_off
+  • lift_weight_1_2_25lbs-r-r_on
+  • lift_weight_1_3_25lbs-l-c_off
+  • lift_weight_1_3_25lbs-l-l_off
+  • lift_weight_1_3_25lbs-r-c_off
+  • lift_weight_1_3_25lbs-r-r_off
+  • lift_weight_2_0lbs-l-c_on
+  • lift_weight_2_0lbs-l-l_on
+  • lift_weight_2_0lbs-r-c_on
+  • lift_weight_2_0lbs-r-r_on
+  • lift_weight_2_1_0lbs-l-c_on
+  • lift_weight_2_1_0lbs-l-l_on
+  • lift_weight_2_1_0lbs-r-c_on
+  • lift_weight_2_1_0lbs-r-r_on
+  • lift_weight_2_2_0lbs-l-c_off
+  • lift_weight_2_2_0lbs-l-l_off
+  • lift_weight_2_2_0lbs-r-c_off
+  • lift_weight_2_2_0lbs-r-r_off
+  • lunges_1_2_off
+  • lunges_1_on
+  • lunges_2_2_left_off
+  • lunges_2_2_right_off
+  • lunges_2_left_on
+  • lunges_2_right_on
+  • meander_1_off
+  • normal_walk_1_0-6_on
+  • normal_walk_1_1-2_on
+  • normal_walk_1_1-8_on
+  • normal_walk_1_2-0_on
+  • normal_walk_1_2-5_on
+  • normal_walk_1_2_0-6_off
+  • normal_walk_1_2_1-2_off
+  • normal_walk_1_2_1-8_off
+  • normal_walk_1_2_2-0_off
+  • normal_walk_1_2_2-5_off
+  • normal_walk_1_2_shuffle_off
+  • normal_walk_1_2_skip_off
+  • normal_walk_1_3_1-2_hilo
+  • normal_walk_1_3_2-5_on
+  • normal_walk_1_4_2-0_off
+  • normal_walk_1_4_2-5_off
+  • normal_walk_1_4_shuffle_off
+  • normal_walk_1_4_skip_off
+  • normal_walk_2_1_0-6_on
+  • normal_walk_2_1_1-2_on
+  • normal_walk_2_1_1-8_on
+  • normal_walk_2_1_2-0_on
+  • normal_walk_2_1_2-5_on
+  • normal_walk_3_0-6_off
+  • normal_walk_3_1-2_off
+  • normal_walk_3_1-8_off
+  • normal_walk_3_1_2-0_on
+  • normal_walk_3_1_2-5_on
+  • normal_walk_3_1_shuffle_on
+  • normal_walk_3_1_skip_on
+  • normal_walk_3_2-0_off
+  • normal_walk_3_2-5_off
+  • normal_walk_3_shuffle_off
+  • normal_walk_3_skip_off
+  • obstacle_walk_1_1_off
+  • obstacle_walk_1_off
+  • poses_1_off
+  • push_1_off
+  • side_shuffle_1_off
+  • sit_to_stand_1_2_short-arm_off
+  • sit_to_stand_1_2_short-noarm_off
+  • sit_to_stand_1_short-arm_on
+  • sit_to_stand_1_short-noarm_on
+  • sit_to_stand_2_2_tall-noarm_off
+  • sit_to_stand_2_tall-noarm_on
+  • squats_1_0lbs_on
+  • squats_1_25lbs_on
+  • squats_1_2_0lbs_off
+  • squats_1_2_25lbs_off
+  • squats_2_0lbs_off
+  • squats_2_25lbs_off
+  • squats_2_2_0lbs_off
+  • squats_2_2_25lbs_off
+  • stairs_1_10_down_off
+  • stairs_1_1_10_down_off
+  • stairs_1_1_10_down_on
+  • stairs_1_1_11_up_on
+  • stairs_1_1_12_down_on
+  • stairs_1_1_1_up_on
+  • stairs_1_1_2_down_off
+  • stairs_1_1_2_down_on
+  • stairs_1_1_3_up_on
+  • stairs_1_1_4_down_off
+  • stairs_1_1_4_down_on
+  • stairs_1_1_5_up_on
+  • stairs_1_1_6_down_off
+  • stairs_1_1_6_down_on
+  • stairs_1_1_7_up_on
+  • stairs_1_1_8_down_off
+  • stairs_1_1_8_down_on
+  • stairs_1_1_9_up_on
+  • stairs_1_1_up_on
+  • stairs_1_2_down_off
+  • stairs_1_3_up_on
+  • stairs_1_4_down_off
+  • stairs_1_5_up_on
+  • stairs_1_6_down_off
+  • stairs_1_7_up_on
+  • stairs_1_8_down_off
+  • stairs_1_9_up_on
+  • stairs_2_11_up_off
+  • stairs_2_1_10_down_on
+  • stairs_2_1_1_up_off
+  • stairs_2_1_2_down_on
+  • stairs_2_1_3_up_off
+  • stairs_2_1_4_down_on
+  • stairs_2_1_5_up_off
+  • stairs_2_1_6_down_on
+  • stairs_2_1_7_up_off
+  • stairs_2_1_8_down_on
+  • stairs_2_1_9_up_off
+  • stairs_2_1_up_off
+  • stairs_2_3_up_off
+  • stairs_2_5_up_off
+  • stairs_2_7_up_off
+  • stairs_2_9_up_off
+  • start_stop_1_off
+  • step_ups_1_left_off
+  • step_ups_1_right_off
+  • tire_run_1_off
+  • tug_of_war_1_2_off
+  • tug_of_war_1_on
+  • tug_of_war_2_off
+  • turn_and_step_1_left-turn_off
+  • turn_and_step_1_right-turn_off
+  • twister_1_off
+  • walk_backward_1_0-6_off
+  • walk_backward_1_0-6_on
+  • walk_backward_1_0-8_off
+  • walk_backward_1_0-8_on
+  • walk_backward_1_1-0_off
+  • walk_backward_1_1-0_on
+  • walk_backward_1_2_0-6_off
+  • walk_backward_1_2_0-8_off
+  • walk_backward_1_2_1-0_off
+  • walk_backward_2_1_0-6_on
+  • walk_backward_2_1_0-8_on
+  • walk_backward_2_1_1-0_on
+  • weighted_walk_1_1_25lbs_off
+  • weighted_walk_1_25lbs_off
+  • weighted_walk_1_25lbs_on
+
+⚠️  仅在TEST中的运动模式文件夹: 18
+
+这些运动模式在训练集中没有对应数据：
+  • stairs_2_11_up_on
+    └─ 解析为: 运动形式='stairs', 类型='on'
+  • stairs_2_1_up_on
+    └─ 解析为: 运动形式='stairs', 类型='on'
+  • stairs_2_3_up_on
+    └─ 解析为: 运动形式='stairs', 类型='on'
+  • stairs_2_5_up_on
+    └─ 解析为: 运动形式='stairs', 类型='on'
+  • stairs_2_7_up_on
+    └─ 解析为: 运动形式='stairs', 类型='on'
+  • stairs_2_9_up_on
+    └─ 解析为: 运动形式='stairs', 类型='on'
+  • stairs_3_10_down_on
+    └─ 解析为: 运动形式='stairs', 类型='on'
+  • stairs_3_11_up_on
+    └─ 解析为: 运动形式='stairs', 类型='on'
+  • stairs_3_12_down_on
+    └─ 解析为: 运动形式='stairs', 类型='on'
+  • stairs_3_1_up_on
+    └─ 解析为: 运动形式='stairs', 类型='on'
+  • stairs_3_2_down_on
+    └─ 解析为: 运动形式='stairs', 类型='on'
+  • stairs_3_3_up_on
+    └─ 解析为: 运动形式='stairs', 类型='on'
+  • stairs_3_4_down_on
+    └─ 解析为: 运动形式='stairs', 类型='on'
+  • stairs_3_5_up_on
+    └─ 解析为: 运动形式='stairs', 类型='on'
+  • stairs_3_6_down_on
+    └─ 解析为: 运动形式='stairs', 类型='on'
+  • stairs_3_7_up_on
+    └─ 解析为: 运动形式='stairs', 类型='on'
+  • stairs_3_8_down_on
+    └─ 解析为: 运动形式='stairs', 类型='on'
+  • stairs_3_9_up_on
+    └─ 解析为: 运动形式='stairs', 类型='on'
+
+================================================================================
+分析完成!
+================================================================================
+

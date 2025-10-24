@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -ex
+
+# This is the master script for the capsule. When you click "Reproducible Run", the code in this file will execute.
+printf "Using default_config.\n"
+python -u example.py
+
+printf "\nUsing sensor_selection.all_sensors_no_insole_config.\n"
+python -u example.py --config_path configs.sensor_selection.all_sensors_no_insole_config
+
+printf "\nUsing sensor_selection.encoders_only_config.\n"
+python -u example.py --config_path configs.sensor_selection.encoders_only_config
+
+printf "\nUsing sensor_selection.imus_only_config.\n"
+python -u example.py --config_path configs.sensor_selection.imus_only_config
+
+printf "\nUsing sensor_selection.insole_only_config.\n"
+python -u example.py --config_path configs.sensor_selection.insole_only_config
+
+printf "\nUsing sensor_selection.no_insole_or_footimu_config.\n"
+python -u example.py --config_path configs.sensor_selection.no_insole_or_footimu_config
