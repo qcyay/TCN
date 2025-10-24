@@ -98,8 +98,13 @@ eff_hist = 248
 
 # ==================== Transformer预测模型配置 ====================
 
-# 序列长度（滑动窗口大小）
+# 输入序列长度（滑动窗口大小）
 sequence_length = 100
+
+# 输出序列长度（预测或生成的序列长度）
+# 对于预测模型：决定预测的时间步数
+# 对于生成式模型：决定生成的时间步数
+output_sequence_length = 50
 
 # Transformer隐藏维度
 d_model = 256
@@ -131,7 +136,7 @@ gen_num_encoder_layers = 3     # 编码器层数（如果使用transformer encod
 gen_num_decoder_layers = 3     # 解码器层数
 gen_dim_feedforward = 512      # 前馈网络维度
 gen_dropout = 0.1              # Dropout比率
-gen_sequence_length = 100      # 序列长度
+gen_sequence_length = 100      # 编码器输入序列长度
 
 # 自回归生成时的起始token值（可以是0或其他合理值）
 start_token_value = 0.0
@@ -144,8 +149,11 @@ teacher_forcing_ratio = 1.0
 # 训练轮数
 num_epochs = 2000
 
-# 批次大小
+# 训练批次大小
 batch_size = 32
+
+# 测试批次大小（可以与训练批次大小不同）
+test_batch_size = 32
 
 # 学习率
 learning_rate = 0.001

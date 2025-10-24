@@ -8,7 +8,10 @@ import numpy as np
 
 class SequenceDataset(Dataset):
     '''
-    通用序列数据集，支持预测模型和生成式模型
+    优化的通用序列数据集，支持预测模型和生成式模型
+    - 在初始化时预加载所有数据到内存
+    - 使用numpy数组存储数据以提高访问速度
+    - 序列索引直接指向预加载的数据
     '''
 
     def __init__(self,
@@ -17,6 +20,7 @@ class SequenceDataset(Dataset):
                  label_names: List[str],
                  side: str,
                  sequence_length: int,
+                 output_sequence_length: int,
                  model_delays: List[int],
                  participant_masses: Dict[str, float] = {},
                  device: torch.device = torch.device("cpu"),
@@ -33,7 +37,8 @@ class SequenceDataset(Dataset):
             input_names: 输入特征列名列表
             label_names: 标签列名列表
             side: 身体侧别 ('l' 或 'r')
-            sequence_length: 序列长度（窗口大小）
+            sequence_length: 输入序列长度（窗口大小）
+            output_sequence_length: 输出序列长度（预测/生成的时间步数）
             model_delays: 每个输出的预测延迟
             participant_masses: 参与者体重字典
             device: 计算设备
@@ -48,6 +53,7 @@ class SequenceDataset(Dataset):
         self.label_names = label_names
         self.side = side
         self.sequence_length = sequence_length
+        self.output_sequence_length = output_sequence_length
         self.model_delays = model_delays
         self.participant_masses = participant_masses
         self.device = device
@@ -72,8 +78,16 @@ class SequenceDataset(Dataset):
         # 获取试验名称列表
         self.trial_names = self._get_trial_names()
 
-        # 加载所有数据并生成序列索引
-        print(f"加载 {self.mode} 数据集 ({model_type})...")
+        print(f"开始加载 {self.mode} 数据集 ({model_type})...")
+        print(f"找到 {len(self.trial_names)} 个试验")
+
+        # 预加载所有数据到内存
+        self.all_input_data = []  # 存储所有试验的输入数据
+        self.all_label_data = []  # 存储所有试验的标签数据
+        self._preload_all_data()
+
+        # 生成序列索引
+        print(f"生成序列索引...")
         self.sequences = self._generate_sequences()
 
         print(f"数据集初始化完成 - 模式: {self.mode}, "
@@ -86,30 +100,29 @@ class SequenceDataset(Dataset):
 
     def __getitem__(self, idx: int):
         '''
-        获取单个序列样本
+        获取单个序列样本（优化版本：直接从预加载的数据中索引）
 
         对于Transformer预测模型:
             返回: (input_data, label_data)
             - input_data: [num_input_features, sequence_length]
-            - label_data: [num_label_features, sequence_length]
+            - label_data: [num_label_features, output_sequence_length]
 
         对于GenerativeTransformer:
             返回: (input_data, shifted_label_data, label_data)
             - input_data: [num_input_features, sequence_length]
-            - shifted_label_data: [num_label_features, sequence_length] (解码器输入)
-            - label_data: [num_label_features, sequence_length] (目标输出)
+            - shifted_label_data: [num_label_features, output_sequence_length]
+            - label_data: [num_label_features, output_sequence_length]
         '''
-        trial_idx, start_idx = self.sequences[idx]
-        trial_name = self.trial_names[trial_idx]
+        # 获取序列索引信息
+        trial_idx, input_start_idx, label_start_idx = self.sequences[idx]
 
-        # 加载试验数据
-        input_data, label_data = self._load_trial_data(trial_name)
+        # 从预加载的数据中提取序列
+        input_seq = self.all_input_data[trial_idx][:, input_start_idx:input_start_idx + self.sequence_length]
+        label_seq = self.all_label_data[trial_idx][:, label_start_idx:label_start_idx + self.output_sequence_length]
 
-        # 提取序列片段
-        end_idx = start_idx + self.sequence_length
-        input_seq = input_data[:, start_idx:end_idx]
-        label_seq = label_data[:, start_idx:end_idx]
-        # breakpoint()
+        # 转换为tensor
+        input_seq = torch.from_numpy(input_seq).float()
+        label_seq = torch.from_numpy(label_seq).float()
 
         if self.model_type == 'GenerativeTransformer':
             # 生成式模型需要shifted的标签作为解码器输入
@@ -124,10 +137,10 @@ class SequenceDataset(Dataset):
         创建右移的目标序列（用于解码器输入）
 
         参数:
-            label_seq: [num_outputs, sequence_length]
+            label_seq: [num_outputs, output_sequence_length]
 
         返回:
-            shifted_seq: [num_outputs, sequence_length]
+            shifted_seq: [num_outputs, output_sequence_length]
         """
         num_outputs, seq_len = label_seq.shape
 
@@ -192,6 +205,26 @@ class SequenceDataset(Dataset):
         else:
             return len(df)
 
+    def _preload_all_data(self):
+        """
+        预加载所有试验数据到内存（关键优化）
+        这样只需要在初始化时读取一次CSV文件
+        """
+        print("预加载所有试验数据到内存...")
+
+        for trial_idx, trial_name in enumerate(self.trial_names):
+            if (trial_idx + 1) % 10 == 0 or (trial_idx + 1) == len(self.trial_names):
+                print(f"  加载进度: {trial_idx + 1}/{len(self.trial_names)}")
+
+            # 加载单个试验数据
+            input_data, label_data = self._load_trial_data(trial_name)
+
+            # 转换为numpy数组并存储
+            self.all_input_data.append(input_data.numpy())
+            self.all_label_data.append(label_data.numpy())
+
+        print("所有数据预加载完成!")
+
     def _load_trial_data(self, trial_name: str) -> Tuple[torch.Tensor, torch.Tensor]:
         '''
         加载单个试验的完整数据
@@ -227,10 +260,7 @@ class SequenceDataset(Dataset):
         input_data, cutoff_length = self._load_input_data(input_file_path, body_mass)
         label_data = self._load_label_data(label_file_path, cutoff_length)
 
-        # 对于预测模型，应用延迟；对于生成式模型，不在这里应用延迟
-        if self.model_type != 'GenerativeTransformer':
-            label_data = self._apply_delays(label_data)
-
+        # 注意：不在这里应用延迟，延迟会在生成序列索引时处理
         return input_data, label_data
 
     def _load_input_data(self, file_path: str, body_mass: float) -> Tuple[torch.Tensor, Optional[int]]:
@@ -295,55 +325,69 @@ class SequenceDataset(Dataset):
 
         return label_data
 
-    def _apply_delays(self, label_data: torch.Tensor) -> torch.Tensor:
+    def _generate_sequences(self) -> List[Tuple[int, int, int]]:
         '''
-        应用预测延迟到标签数据（仅用于预测模型）
+        生成所有可用的序列索引（关键优化）
+        返回: [(trial_idx, input_start_idx, label_start_idx), ...]
 
-        参数:
-            label_data: [num_outputs, seq_len]
+        对于预测模型：
+        - input_seq: 从 input_start_idx 开始，长度为 sequence_length
+        - label_seq: 从 input_start_idx + sequence_length + max(model_delays) 开始，
+                    长度为 output_sequence_length
 
-        返回:
-            delayed_label_data: [num_outputs, seq_len]
-        '''
-        num_outputs, seq_len = label_data.shape
-        delayed_label_data = label_data.clone()
-
-        for i, delay in enumerate(self.model_delays):
-            if delay > 0:
-                # 将标签向前移动delay个位置
-                delayed_label_data[i, :-delay] = label_data[i, delay:]
-                # 末尾用NaN填充
-                delayed_label_data[i, -delay:] = float('nan')
-
-        return delayed_label_data
-
-    def _generate_sequences(self) -> List[Tuple[int, int]]:
-        '''
-        生成所有可用的序列索引
-
-        返回:
-            sequences: [(trial_idx, start_idx), ...]
+        对于生成式模型：
+        - input_seq: 从 input_start_idx 开始，长度为 sequence_length
+        - label_seq: 从 input_start_idx + sequence_length 开始，
+                    长度为 output_sequence_length
         '''
         sequences = []
 
-        for trial_idx, trial_name in enumerate(self.trial_names):
-            # 加载试验数据
-            input_data, label_data = self._load_trial_data(trial_name)
-            seq_len = input_data.shape[1]
+        for trial_idx in range(len(self.trial_names)):
+            # 获取该试验的数据长度
+            input_len = self.all_input_data[trial_idx].shape[1]
+            label_len = self.all_label_data[trial_idx].shape[1]
 
-            # 计算最大延迟
-            max_delay = max(self.model_delays) if self.model_type != 'GenerativeTransformer' else 0
+            # 确保输入和标签长度一致
+            data_len = min(input_len, label_len)
 
-            # 生成所有有效的起始索引
-            max_start_idx = seq_len - self.sequence_length - max_delay
+            if self.model_type == 'GenerativeTransformer':
+                # 生成式模型：标签紧接在输入后面
+                # 需要的总长度：sequence_length + output_sequence_length
+                required_length = self.sequence_length + self.output_sequence_length
 
-            if max_start_idx < 0:
-                print(f"警告: 试验 {trial_name} 数据长度不足，跳过")
-                continue
+                if data_len < required_length:
+                    print(f"警告: 试验 {self.trial_names[trial_idx]} 数据长度不足 "
+                          f"(需要{required_length}, 实际{data_len})，跳过")
+                    continue
 
-            for start_idx in range(max_start_idx + 1):
-                sequences.append((trial_idx, start_idx))
-            # breakpoint()
+                # 生成所有有效的起始索引
+                max_start_idx = data_len - required_length
+
+                for input_start_idx in range(max_start_idx + 1):
+                    # 标签从输入结束位置开始
+                    label_start_idx = input_start_idx + self.sequence_length
+                    sequences.append((trial_idx, input_start_idx, label_start_idx))
+
+            else:
+                # 预测模型：标签在输入后延迟一定距离
+                # 计算最大延迟（用于确定标签起始位置）
+                max_delay = max(self.model_delays)
+
+                # 需要的总长度：sequence_length + max_delay + output_sequence_length
+                required_length = self.sequence_length + max_delay + self.output_sequence_length
+
+                if data_len < required_length:
+                    print(f"警告: 试验 {self.trial_names[trial_idx]} 数据长度不足 "
+                          f"(需要{required_length}, 实际{data_len})，跳过")
+                    continue
+
+                # 生成所有有效的起始索引
+                max_start_idx = data_len - required_length
+
+                for input_start_idx in range(max_start_idx + 1):
+                    # 标签从输入结束位置 + max_delay 开始
+                    label_start_idx = input_start_idx + self.sequence_length + max_delay
+                    sequences.append((trial_idx, input_start_idx, label_start_idx))
 
         return sequences
 
@@ -357,6 +401,7 @@ if __name__ == "__main__":
         "label_names": ["hip_flexion_r_moment", "knee_angle_r_moment"],
         "side": "r",
         "sequence_length": 50,
+        "output_sequence_length": 25,
         "model_delays": [10, 0],
         "participant_masses": {"BT23": 67.23, "BT24": 77.79},
         "device": torch.device("cuda" if torch.cuda.is_available() else "cpu"),
@@ -374,8 +419,8 @@ if __name__ == "__main__":
 
     # 加载一个样本
     input_seq, label_seq = pred_dataset[0]
-    print(f"输入序列形状: {input_seq.shape}")
-    print(f"标签序列形状: {label_seq.shape}")
+    print(f"输入序列形状: {input_seq.shape}")  # 应该是 [num_features, 50]
+    print(f"标签序列形状: {label_seq.shape}")  # 应该是 [2, 25]
 
     print("\n" + "=" * 60)
     print("测试生成式模型数据集")
@@ -387,8 +432,8 @@ if __name__ == "__main__":
 
     # 加载一个样本
     input_seq, shifted_label, label_seq = gen_dataset[0]
-    print(f"输入序列形状: {input_seq.shape}")
-    print(f"Shifted标签形状: {shifted_label.shape}")
-    print(f"目标标签形状: {label_seq.shape}")
+    print(f"输入序列形状: {input_seq.shape}")  # 应该是 [num_features, 50]
+    print(f"Shifted标签形状: {shifted_label.shape}")  # 应该是 [2, 25]
+    print(f"目标标签形状: {label_seq.shape}")  # 应该是 [2, 25]
     print(f"Shifted标签第一个值: {shifted_label[:, 0]}")
     print(f"原始标签第一个值: {label_seq[:, 0]}")

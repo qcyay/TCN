@@ -206,6 +206,7 @@ def main():
     # 根据模型类型加载数据集
     if model_type in ["Transformer", "GenerativeTransformer"]:
         seq_len = config.gen_sequence_length if model_type == "GenerativeTransformer" else config.sequence_length
+        output_seq_len = getattr(config, 'output_sequence_length', seq_len)  # 新增：输出序列长度
 
         print(f"\n加载{model_type}测试数据集...")
         test_dataset = SequenceDataset(
@@ -214,6 +215,7 @@ def main():
             label_names=label_names,
             side=config.side,
             sequence_length=seq_len,
+            output_sequence_length=output_seq_len,  # 新增
             model_delays=config.model_delays,
             participant_masses=config.participant_masses,
             device=device,
@@ -225,9 +227,12 @@ def main():
 
         collate_fn = collate_fn_generative if model_type == "GenerativeTransformer" else collate_fn_predictor
 
+        # 使用配置中的测试批次大小
+        test_batch_size = getattr(config, 'test_batch_size', args.batch_size)
+
         test_loader = DataLoader(
             test_dataset,
-            batch_size=args.batch_size,
+            batch_size=test_batch_size,  # 修改：使用test_batch_size
             shuffle=False,
             collate_fn=collate_fn
         )
@@ -300,6 +305,9 @@ def main():
             mode='test',
             load_to_device=False
         )
+
+        # 使用配置中的测试批次大小
+        test_batch_size = getattr(config, 'test_batch_size', args.batch_size)
 
         test_loader = DataLoader(
             test_dataset,

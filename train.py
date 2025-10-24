@@ -547,6 +547,7 @@ def main():
     # 根据模型类型选择数据加载器和collate函数
     if config.model_type in ['Transformer', 'GenerativeTransformer']:
         seq_len = config.gen_sequence_length if config.model_type == 'GenerativeTransformer' else config.sequence_length
+        output_seq_len = getattr(config, 'output_sequence_length', seq_len)  # 新增：输出序列长度
 
         print(f"加载{config.model_type}训练数据集...")
         train_dataset = SequenceDataset(
@@ -555,6 +556,7 @@ def main():
             label_names=label_names,
             side=config.side,
             sequence_length=seq_len,
+            output_sequence_length=output_seq_len,  # 新增
             model_delays=config.model_delays,
             participant_masses=config.participant_masses,
             device=device,
@@ -571,6 +573,7 @@ def main():
             label_names=label_names,
             side=config.side,
             sequence_length=seq_len,
+            output_sequence_length=output_seq_len,  # 新增
             model_delays=config.model_delays,
             participant_masses=config.participant_masses,
             device=device,
@@ -620,9 +623,12 @@ def main():
         pin_memory=True if args.num_workers > 0 and device.type == 'cuda' else False
     )
 
+    # 使用独立的测试批次大小
+    test_batch_size = getattr(config, 'test_batch_size', config.batch_size)
+
     test_loader = DataLoader(
         test_dataset,
-        batch_size=config.batch_size,
+        batch_size=test_batch_size,  # 修改：使用test_batch_size
         shuffle=False,
         collate_fn=collate_fn,
         num_workers=args.num_workers,
