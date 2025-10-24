@@ -230,64 +230,164 @@ def create_model(config, device: torch.device, resume_path: str = None) -> Tuple
     return model, start_epoch
 
 
-def compute_metrics_batch(estimates: torch.Tensor, labels: torch.Tensor,
-                          num_outputs: int, metrics_accumulator: dict) -> None:
+def compute_metrics_transformer_vectorized(estimates: torch.Tensor,
+                                           labels: torch.Tensor,
+                                           num_outputs: int) -> dict:
     """
-    逐batch累积计算评估指标
+    完全向量化的Transformer指标计算（无循环）
+
+    策略：
+    - RMSE: 在所有数据点上计算
+    - R²: 使用向量化操作在每个序列上计算，然后平均
+    - MAE: 使用向量化操作在每个序列上计算range并归一化
 
     参数:
-        estimates: [batch_size, num_outputs, seq_len]
-        labels: [batch_size, num_outputs, seq_len]
-        num_outputs: 输出特征数量
-        metrics_accumulator: 累积指标的字典
-    """
-    batch_size, _, seq_len = estimates.shape
-
-    for i in range(batch_size):
-        for j in range(num_outputs):
-            estimate = estimates[i, j, :]
-            label = labels[i, j, :]
-
-            valid_mask = ~torch.isnan(estimate) & ~torch.isnan(label)
-            estimate_valid = estimate[valid_mask]
-            label_valid = label[valid_mask]
-
-            if len(estimate_valid) == 0:
-                continue
-
-            rmse = torch.sqrt(torch.mean((estimate_valid - label_valid) ** 2))
-            ss_res = torch.sum((label_valid - estimate_valid) ** 2)
-            ss_tot = torch.sum((label_valid - torch.mean(label_valid)) ** 2)
-            r2 = 1 - (ss_res / (ss_tot + 1e-8))
-            label_range = torch.max(label_valid) - torch.min(label_valid)
-            mae = torch.mean(torch.abs(estimate_valid - label_valid))
-            normalized_mae = mae / (label_range + 1e-8)
-
-            metrics_accumulator[f"output_{j}"]["rmse"] += rmse.item()
-            metrics_accumulator[f"output_{j}"]["r2"] += r2.item()
-            metrics_accumulator[f"output_{j}"]["normalized_mae"] += normalized_mae.item()
-            metrics_accumulator[f"output_{j}"]["count"] += 1
-
-
-def finalize_metrics(metrics_accumulator: dict, num_outputs: int) -> dict:
-    """
-    计算累积指标的平均值
-
-    参数:
-        metrics_accumulator: 累积的指标字典
-        num_outputs: 输出特征数量
+        estimates: [batch_size, num_outputs, seq_len] 预测值
+        labels: [batch_size, num_outputs, seq_len] 真实值
+        num_outputs: 输出通道数
 
     返回:
-        metrics: 平均后的指标字典
+        metrics: 包含每个输出通道指标的字典
     """
-    for j in range(num_outputs):
-        count = metrics_accumulator[f"output_{j}"]["count"]
-        if count > 0:
-            metrics_accumulator[f"output_{j}"]["rmse"] /= count
-            metrics_accumulator[f"output_{j}"]["r2"] /= count
-            metrics_accumulator[f"output_{j}"]["normalized_mae"] /= count
+    batch_size, _, seq_len = estimates.shape
+    metrics = {}
 
-    return metrics_accumulator
+    for j in range(num_outputs):
+        est = estimates[:, j, :]  # [batch_size, seq_len]
+        lbl = labels[:, j, :]  # [batch_size, seq_len]
+
+        # 创建有效数据掩码
+        valid_mask = ~torch.isnan(est) & ~torch.isnan(lbl)  # [batch_size, seq_len]
+
+        if valid_mask.sum() == 0:
+            metrics[f"output_{j}"] = {
+                "rmse": 0.0,
+                "r2": 0.0,
+                "mae_percent": 0.0,
+                "count": 0
+            }
+            continue
+
+        # 用0填充NaN位置（配合mask使用，不影响计算）
+        est_filled = torch.where(valid_mask, est, torch.zeros_like(est))
+        lbl_filled = torch.where(valid_mask, lbl, torch.zeros_like(lbl))
+
+        # ============ 1. RMSE: 在所有有效数据点上计算 ============
+        est_flat = est[valid_mask]
+        lbl_flat = lbl[valid_mask]
+        rmse = torch.sqrt(torch.mean((est_flat - lbl_flat) ** 2))
+
+        # ============ 2. R²: 向量化计算（每个序列） ============
+        # 计算每个序列的有效元素数量
+        valid_counts = valid_mask.sum(dim=1, keepdim=True).float()  # [batch_size, 1]
+
+        # 计算每个序列的label均值（只对有效元素）
+        lbl_sum = (lbl_filled * valid_mask.float()).sum(dim=1, keepdim=True)  # [batch_size, 1]
+        lbl_mean = lbl_sum / (valid_counts + 1e-8)  # [batch_size, 1]
+
+        # 计算ss_res（残差平方和）
+        diff = lbl_filled - est_filled  # [batch_size, seq_len]
+        diff_sq = diff ** 2
+        ss_res = (diff_sq * valid_mask.float()).sum(dim=1)  # [batch_size]
+
+        # 计算ss_tot（总平方和）
+        lbl_centered = lbl_filled - lbl_mean  # [batch_size, seq_len]
+        lbl_centered_sq = lbl_centered ** 2
+        ss_tot = (lbl_centered_sq * valid_mask.float()).sum(dim=1)  # [batch_size]
+
+        # 计算R²
+        r2 = 1 - (ss_res / (ss_tot + 1e-8))  # [batch_size]
+
+        # 只保留有效序列（至少有1个有效点）
+        valid_sequences = valid_counts.squeeze() > 0  # [batch_size]
+        r2_valid = r2[valid_sequences]
+        r2_mean = r2_valid.mean() if len(r2_valid) > 0 else torch.tensor(0.0, device=r2.device)
+
+        # ============ 3. Normalized MAE: 向量化计算 ============
+        # 计算每个序列的label range（使用masked操作）
+        # 对于min，将无效位置设为inf；对于max，将无效位置设为-inf
+        lbl_for_max = torch.where(valid_mask, lbl_filled,
+                                  torch.full_like(lbl_filled, -float('inf')))
+        lbl_for_min = torch.where(valid_mask, lbl_filled,
+                                  torch.full_like(lbl_filled, float('inf')))
+
+        lbl_max = lbl_for_max.max(dim=1, keepdim=True)[0]  # [batch_size, 1]
+        lbl_min = lbl_for_min.min(dim=1, keepdim=True)[0]  # [batch_size, 1]
+        label_range = lbl_max - lbl_min  # [batch_size, 1]
+
+        # 计算MAE
+        abs_diff = torch.abs(lbl_filled - est_filled)  # [batch_size, seq_len]
+        mae_sum = (abs_diff * valid_mask.float()).sum(dim=1, keepdim=True)  # [batch_size, 1]
+        mae = mae_sum / (valid_counts + 1e-8)  # [batch_size, 1]
+
+        # 归一化为百分数
+        mae_percent = (mae / (label_range + 1e-8)) * 100.0  # [batch_size, 1]
+
+        # 只保留有效序列
+        mae_percent_valid = mae_percent.squeeze()[valid_sequences]
+        mae_percent_mean = mae_percent_valid.mean() if len(mae_percent_valid) > 0 else torch.tensor(0.0,
+                                                                                                    device=mae_percent.device)
+
+        # ============ 保存结果 ============
+        metrics[f"output_{j}"] = {
+            "rmse": rmse.item(),
+            "r2": r2_mean.item(),
+            "mae_percent": mae_percent_mean.item(),
+            "count": valid_sequences.sum().item()
+        }
+
+    return metrics
+
+
+def compute_metrics_tcn_trial(estimates: torch.Tensor,
+                              labels: torch.Tensor,
+                              valid_mask: torch.Tensor,
+                              num_outputs: int) -> dict:
+    """
+    TCN模型的指标计算（针对单个长序列试验）
+
+    策略：所有指标在整个长序列上计算
+    """
+    metrics = {}
+
+    for j in range(num_outputs):
+        est = estimates[j]
+        lbl = labels[j]
+        mask = valid_mask[j]
+
+        if mask.sum() == 0:
+            metrics[f"output_{j}"] = {
+                "rmse": 0.0,
+                "r2": 0.0,
+                "mae_percent": 0.0,
+                "count": 0
+            }
+            continue
+
+        est_valid = est[mask]
+        lbl_valid = lbl[mask]
+
+        # RMSE
+        rmse = torch.sqrt(torch.mean((est_valid - lbl_valid) ** 2))
+
+        # R²
+        ss_res = torch.sum((lbl_valid - est_valid) ** 2)
+        ss_tot = torch.sum((lbl_valid - torch.mean(lbl_valid)) ** 2)
+        r2 = 1 - (ss_res / (ss_tot + 1e-8))
+
+        # MAE as percentage
+        label_range = torch.max(lbl_valid) - torch.min(lbl_valid)
+        mae = torch.mean(torch.abs(est_valid - lbl_valid))
+        mae_percent = (mae / (label_range + 1e-8)) * 100.0
+
+        metrics[f"output_{j}"] = {
+            "rmse": rmse.item(),
+            "r2": r2.item(),
+            "mae_percent": mae_percent.item(),
+            "count": 1
+        }
+
+    return metrics
 
 
 def validate(model: nn.Module,
@@ -296,7 +396,14 @@ def validate(model: nn.Module,
              device: torch.device,
              model_type: str,
              config) -> Tuple[dict, float]:
-    """在验证/测试集上评估模型"""
+    """
+    完全优化的验证函数
+
+    改进：
+    1. Transformer使用完全向量化计算（无Python循环）
+    2. 根据模型类型采用不同的指标计算策略
+    3. MAE以百分数形式显示
+    """
     model.eval()
     criterion = nn.MSELoss()
 
@@ -306,86 +413,89 @@ def validate(model: nn.Module,
 
     # 初始化指标累积器
     metrics_accumulator = {
-        f"output_{i}": {"rmse": 0.0, "r2": 0.0, "normalized_mae": 0.0, "count": 0}
+        f"output_{i}": {"rmse": 0.0, "r2": 0.0, "mae_percent": 0.0, "count": 0}
         for i in range(num_outputs)
     }
 
     with torch.no_grad():
         if model_type == 'TCN':
-            # TCN: 逐batch处理，不concatenate（因为序列长度不同）
-            for idx, batch_data in enumerate(dataloader):
-                # print(idx)
+            # TCN: 逐试验处理长序列
+            for batch_data in dataloader:
                 input_data, label_data, trial_lengths = batch_data
                 input_data = input_data.to(device)
                 label_data = label_data.to(device)
 
                 estimates = model(input_data)
 
-                # 逐样本计算指标（考虑序列长度和延迟）
                 model_history = model.get_effective_history()
                 batch_size = estimates.size(0)
 
                 for i in range(batch_size):
+                    est_trial = estimates[i, :, model_history:trial_lengths[i]]
+                    lbl_trial = label_data[i, :, model_history:trial_lengths[i]]
+
+                    # 应用延迟
+                    valid_masks = []
+                    est_shifted = []
+                    lbl_shifted = []
+
                     for j in range(num_outputs):
-                        est = estimates[i, j, model_history:trial_lengths[i]]
-                        lbl = label_data[i, j, model_history:trial_lengths[i]]
+                        est_j = est_trial[j]
+                        lbl_j = lbl_trial[j]
 
                         if config.model_delays[j] != 0:
-                            est = est[config.model_delays[j]:]
-                            lbl = lbl[:-config.model_delays[j]]
+                            est_j = est_j[config.model_delays[j]:]
+                            lbl_j = lbl_j[:-config.model_delays[j]]
 
-                        valid_mask = ~torch.isnan(est) & ~torch.isnan(lbl)
-                        est_valid = est[valid_mask]
-                        lbl_valid = lbl[valid_mask]
+                        valid_mask_j = ~torch.isnan(est_j) & ~torch.isnan(lbl_j)
 
-                        if len(est_valid) > 0:
-                            # 计算RMSE
-                            rmse = torch.sqrt(torch.mean((est_valid - lbl_valid) ** 2))
+                        est_shifted.append(est_j)
+                        lbl_shifted.append(lbl_j)
+                        valid_masks.append(valid_mask_j)
 
-                            # 计算R²
-                            ss_res = torch.sum((lbl_valid - est_valid) ** 2)
-                            ss_tot = torch.sum((lbl_valid - torch.mean(lbl_valid)) ** 2)
-                            r2 = 1 - (ss_res / (ss_tot + 1e-8))
+                    est_stacked = torch.stack(est_shifted)
+                    lbl_stacked = torch.stack(lbl_shifted)
+                    mask_stacked = torch.stack(valid_masks)
 
-                            # 计算归一化MAE
-                            label_range = torch.max(lbl_valid) - torch.min(lbl_valid)
-                            mae = torch.mean(torch.abs(est_valid - lbl_valid))
-                            normalized_mae = mae / (label_range + 1e-8)
+                    trial_metrics = compute_metrics_tcn_trial(
+                        est_stacked, lbl_stacked, mask_stacked, num_outputs
+                    )
 
-                            # 累积指标
-                            metrics_accumulator[f"output_{j}"]["rmse"] += rmse.item()
-                            metrics_accumulator[f"output_{j}"]["r2"] += r2.item()
-                            metrics_accumulator[f"output_{j}"]["normalized_mae"] += normalized_mae.item()
+                    # 累积指标
+                    for j in range(num_outputs):
+                        if trial_metrics[f"output_{j}"]["count"] > 0:
+                            metrics_accumulator[f"output_{j}"]["rmse"] += trial_metrics[f"output_{j}"]["rmse"]
+                            metrics_accumulator[f"output_{j}"]["r2"] += trial_metrics[f"output_{j}"]["r2"]
+                            metrics_accumulator[f"output_{j}"]["mae_percent"] += trial_metrics[f"output_{j}"][
+                                "mae_percent"]
                             metrics_accumulator[f"output_{j}"]["count"] += 1
 
-                            # 累积损失
-                            if j == 0:  # 只计算一次loss
-                                loss = criterion(est_valid, lbl_valid)
-                                total_loss += loss.item()
-
-                num_batches += batch_size
+                    # 计算损失
+                    valid_data = est_stacked[mask_stacked]
+                    valid_labels = lbl_stacked[mask_stacked]
+                    if len(valid_data) > 0:
+                        loss = criterion(valid_data, valid_labels)
+                        total_loss += loss.item()
+                        num_batches += 1
 
         else:
-            # Transformer模型: 可以concatenate（固定序列长度）
+            # Transformer: 收集所有预测和标签
             all_estimates = []
             all_labels = []
 
-            for idx, batch_data in enumerate(dataloader):
-                # print(idx)
+            for batch_data in dataloader:
                 if model_type == 'GenerativeTransformer':
                     input_data, shifted_label_data, label_data = batch_data
                     input_data = input_data.to(device)
                     shifted_label_data = shifted_label_data.to(device)
                     label_data = label_data.to(device)
 
-                    # 创建因果掩码
                     seq_len = shifted_label_data.size(2)
                     tgt_mask = GenerativeTransformer._generate_square_subsequent_mask(seq_len).to(device)
 
-                    # 使用teacher forcing
                     estimates = model(input_data, shifted_label_data, tgt_mask)
 
-                else:  # Transformer预测模型
+                else:
                     input_data, label_data = batch_data
                     input_data = input_data.to(device)
                     label_data = label_data.to(device)
@@ -406,19 +516,31 @@ def validate(model: nn.Module,
             all_estimates = torch.cat(all_estimates, dim=0)
             all_labels = torch.cat(all_labels, dim=0)
 
-            # 逐batch累积计算指标
-            compute_metrics_batch(all_estimates, all_labels, num_outputs, metrics_accumulator)
+            # 使用完全向量化的函数计算指标
+            metrics_accumulator = compute_metrics_transformer_vectorized(
+                all_estimates, all_labels, num_outputs
+            )
 
-    # 计算平均损失
+    # 计算平均
     avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
 
-    # 计算平均指标
-    metrics = finalize_metrics(metrics_accumulator, num_outputs)
+    # TCN计算平均指标
+    if model_type == 'TCN':
+        for j in range(num_outputs):
+            count = metrics_accumulator[f"output_{j}"]["count"]
+            if count > 0:
+                metrics_accumulator[f"output_{j}"]["rmse"] /= count
+                metrics_accumulator[f"output_{j}"]["r2"] /= count
+                metrics_accumulator[f"output_{j}"]["mae_percent"] /= count
 
     # 构建结果字典
     result_dict = {}
     for j, label_name in enumerate(label_names):
-        result_dict[label_name] = metrics[f"output_{j}"]
+        result_dict[label_name] = {
+            "rmse": metrics_accumulator[f"output_{j}"]["rmse"],
+            "r2": metrics_accumulator[f"output_{j}"]["r2"],
+            "mae_percent": metrics_accumulator[f"output_{j}"]["mae_percent"]
+        }
 
     model.train()
     return result_dict, avg_loss
@@ -686,7 +808,7 @@ def main():
         result_str = (f"\n{label_name}:\n"
                       f"  RMSE: {metrics['rmse']:.4f} Nm/kg\n"
                       f"  R²: {metrics['r2']:.4f}\n"
-                      f"  归一化MAE: {metrics['normalized_mae']:.4f}")
+                      f"  MAE: {metrics['mae_percent']:.2f}%")
         print(result_str)
         initial_log_content += result_str + "\n"
 
@@ -799,7 +921,7 @@ def main():
                 result_str = (f"{label_name}:\n"
                               f"  RMSE: {metrics['rmse']:.4f} Nm/kg\n"
                               f"  R²: {metrics['r2']:.4f}\n"
-                              f"  归一化MAE: {metrics['normalized_mae']:.4f}")
+                              f"  MAE: {metrics['mae_percent']:.2f}%")
                 print(result_str)
                 val_log_content += result_str + "\n"
 
