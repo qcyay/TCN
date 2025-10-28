@@ -139,6 +139,14 @@ start_token_value = 0.0
 # Teacher forcing比率（训练时使用真实值的概率，1.0表示总是使用真实值）
 teacher_forcing_ratio = 1.0
 
+# ==================== 评估配置 ====================
+
+# 序列重组方法（仅用于Transformer和GenerativeTransformer）
+# 'only_first': 每个短序列只取第一个预测值（推荐，速度快，接近实际使用）
+# 'average': 对每个位置的所有预测值取平均（结果更平滑，但计算慢）
+# 注意：TCN模型不使用此参数
+reconstruction_method = 'only_first'
+
 # ==================== 训练配置 ====================
 
 # 训练轮数
@@ -154,7 +162,7 @@ learning_rate = 0.001
 weight_decay = 1e-5
 
 # 验证间隔(每隔多少轮在测试集上验证一次)
-val_interval = 10
+val_interval = 2
 
 # 模型保存间隔(每隔多少轮保存一次模型)
 save_interval = 50

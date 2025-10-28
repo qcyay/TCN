@@ -1,7 +1,7 @@
 import argparse
 import os
 import shutil
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -230,111 +230,171 @@ def create_model(config, device: torch.device, resume_path: str = None) -> Tuple
     return model, start_epoch
 
 
-def compute_metrics_transformer_vectorized(estimates: torch.Tensor,
-                                           labels: torch.Tensor,
-                                           num_outputs: int) -> dict:
+#TODO:可以实现得更加简略和快速
+def reconstruct_sequences_from_predictions(
+        all_estimates: torch.Tensor,
+        all_labels: torch.Tensor,
+        trial_info: List[Tuple[int, int, int]],
+        method: str = "only_first"
+) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
     """
-    完全向量化的Transformer指标计算（无循环）
-
-    策略：
-    - RMSE: 在所有数据点上计算
-    - R²: 使用向量化操作在每个序列上计算，然后平均
-    - MAE: 使用向量化操作在每个序列上计算range并归一化
+    将短序列预测重组回完整序列
 
     参数:
-        estimates: [batch_size, num_outputs, seq_len] 预测值
-        labels: [batch_size, num_outputs, seq_len] 真实值
+        all_estimates: [N, num_outputs, output_seq_len] 所有短序列的预测
+        all_labels: [N, num_outputs, output_seq_len] 所有短序列的标签
+        trial_info: List[(trial_idx, input_start_idx, seq_len)] 每个短序列的信息
+        method: 重组方法 'only_first' 或 'average'
+
+    返回:
+        reconstructed_estimates: List[Tensor[num_outputs, trial_len]] 每个trial的完整序列预测
+        reconstructed_labels: List[Tensor[num_outputs, trial_len]] 每个trial的完整序列标签
+    """
+    # 按trial分组,将属于同一个完整序列的所有短序列分组在一起
+    trial_groups = {}
+    for idx, (trial_idx, input_start_idx, seq_len) in enumerate(trial_info):
+        if trial_idx not in trial_groups:
+            trial_groups[trial_idx] = []
+        trial_groups[trial_idx].append((input_start_idx, idx, seq_len))
+
+    reconstructed_estimates = []
+    reconstructed_labels = []
+
+    for trial_idx in sorted(trial_groups.keys()):
+        # 对属于同一个完整序列的所有短序列按照它们在原序列中的起始位置进行排序
+        group = sorted(trial_groups[trial_idx], key=lambda x: x[0])  # 按input_start_idx排序
+
+        # 确定完整序列长度
+        max_end_pos = max(start_idx + seq_len for start_idx, _, seq_len in group)
+        num_outputs = all_estimates.size(1)
+        output_seq_len = all_estimates.size(2)
+
+        if method == "only_first":
+            # 只使用每个短序列的第一个预测值
+            trial_estimate = torch.full((num_outputs, max_end_pos), float('nan'), device=all_estimates.device)
+            trial_label = torch.full((num_outputs, max_end_pos), float('nan'), device=all_labels.device)
+
+            for start_idx, pred_idx, seq_len in group:
+                # 只取第一个预测值
+                end_pos = start_idx + seq_len
+                trial_estimate[:, end_pos:end_pos + 1] = all_estimates[pred_idx, :, 0:1]
+                trial_label[:, end_pos:end_pos + 1] = all_labels[pred_idx, :, 0:1]
+
+        elif method == "average":
+            # 对每个位置的所有预测值取平均
+            # 使用累加和计数来实现平均
+            trial_estimate_sum = torch.zeros((num_outputs, max_end_pos), device=all_estimates.device)
+            trial_estimate_count = torch.zeros((num_outputs, max_end_pos), device=all_estimates.device)
+            trial_label_sum = torch.zeros((num_outputs, max_end_pos), device=all_labels.device)
+            trial_label_count = torch.zeros((num_outputs, max_end_pos), device=all_labels.device)
+
+            for start_idx, pred_idx, seq_len in group:
+                pred = all_estimates[pred_idx]  # [num_outputs, output_seq_len]
+                lbl = all_labels[pred_idx]  # [num_outputs, output_seq_len]
+
+                end_pos = start_idx + seq_len
+                # 将预测值添加到对应位置
+                for i in range(min(output_seq_len, max_end_pos - end_pos)):
+                    pos = end_pos + i
+                    # 只累加非NaN值
+                    valid_mask = ~torch.isnan(pred[:, i])
+                    trial_estimate_sum[valid_mask, pos] += pred[valid_mask, i]
+                    trial_estimate_count[valid_mask, pos] += 1
+
+                    valid_mask = ~torch.isnan(lbl[:, i])
+                    trial_label_sum[valid_mask, pos] += lbl[valid_mask, i]
+                    trial_label_count[valid_mask, pos] += 1
+
+            # 计算平均
+            trial_estimate = torch.where(
+                trial_estimate_count > 0,
+                trial_estimate_sum / trial_estimate_count,
+                torch.full_like(trial_estimate_sum, float('nan'))
+            )
+            trial_label = torch.where(
+                trial_label_count > 0,
+                trial_label_sum / trial_label_count,
+                torch.full_like(trial_label_sum, float('nan'))
+            )
+
+        else:
+            raise ValueError(f"未知的重组方法: {method}")
+
+        reconstructed_estimates.append(trial_estimate)
+        reconstructed_labels.append(trial_label)
+
+    return reconstructed_estimates, reconstructed_labels
+
+
+def compute_metrics_on_sequences(
+        estimates_list: List[torch.Tensor],
+        labels_list: List[torch.Tensor],
+        num_outputs: int
+) -> Dict:
+    """
+    在完整序列上计算指标
+
+    参数:
+        estimates_list: List[Tensor[num_outputs, seq_len]] 每个trial的预测序列
+        labels_list: List[Tensor[num_outputs, seq_len]] 每个trial的标签序列
         num_outputs: 输出通道数
 
     返回:
         metrics: 包含每个输出通道指标的字典
     """
-    batch_size, _, seq_len = estimates.shape
     metrics = {}
 
     for j in range(num_outputs):
-        est = estimates[:, j, :]  # [batch_size, seq_len]
-        lbl = labels[:, j, :]  # [batch_size, seq_len]
+        rmse_sum = 0.0
+        r2_sum = 0.0
+        mae_percent_sum = 0.0
+        count = 0
 
-        # 创建有效数据掩码
-        valid_mask = ~torch.isnan(est) & ~torch.isnan(lbl)  # [batch_size, seq_len]
+        for est_seq, lbl_seq in zip(estimates_list, labels_list):
+            est = est_seq[j]  # [seq_len]
+            lbl = lbl_seq[j]  # [seq_len]
 
-        if valid_mask.sum() == 0:
+            # 创建有效数据掩码
+            valid_mask = ~torch.isnan(est) & ~torch.isnan(lbl)
+
+            if valid_mask.sum() == 0:
+                continue
+
+            est_valid = est[valid_mask]
+            lbl_valid = lbl[valid_mask]
+
+            # RMSE
+            rmse = torch.sqrt(torch.mean((est_valid - lbl_valid) ** 2))
+
+            # R²
+            ss_res = torch.sum((lbl_valid - est_valid) ** 2)
+            ss_tot = torch.sum((lbl_valid - torch.mean(lbl_valid)) ** 2)
+            r2 = 1 - (ss_res / (ss_tot + 1e-8))
+
+            # MAE as percentage
+            label_range = torch.max(lbl_valid) - torch.min(lbl_valid)
+            mae = torch.mean(torch.abs(est_valid - lbl_valid))
+            mae_percent = (mae / (label_range + 1e-8)) * 100.0
+
+            rmse_sum += rmse.item()
+            r2_sum += r2.item()
+            mae_percent_sum += mae_percent.item()
+            count += 1
+
+        if count > 0:
+            metrics[f"output_{j}"] = {
+                "rmse": rmse_sum / count,
+                "r2": r2_sum / count,
+                "mae_percent": mae_percent_sum / count,
+                "count": count
+            }
+        else:
             metrics[f"output_{j}"] = {
                 "rmse": 0.0,
                 "r2": 0.0,
                 "mae_percent": 0.0,
                 "count": 0
             }
-            continue
-
-        # 用0填充NaN位置（配合mask使用，不影响计算）
-        est_filled = torch.where(valid_mask, est, torch.zeros_like(est))
-        lbl_filled = torch.where(valid_mask, lbl, torch.zeros_like(lbl))
-
-        # ============ 1. RMSE: 在所有有效数据点上计算 ============
-        est_flat = est[valid_mask]
-        lbl_flat = lbl[valid_mask]
-        rmse = torch.sqrt(torch.mean((est_flat - lbl_flat) ** 2))
-
-        # ============ 2. R²: 向量化计算（每个序列） ============
-        # 计算每个序列的有效元素数量
-        valid_counts = valid_mask.sum(dim=1, keepdim=True).float()  # [batch_size, 1]
-
-        # 计算每个序列的label均值（只对有效元素）
-        lbl_sum = (lbl_filled * valid_mask.float()).sum(dim=1, keepdim=True)  # [batch_size, 1]
-        lbl_mean = lbl_sum / (valid_counts + 1e-8)  # [batch_size, 1]
-
-        # 计算ss_res（残差平方和）
-        diff = lbl_filled - est_filled  # [batch_size, seq_len]
-        diff_sq = diff ** 2
-        ss_res = (diff_sq * valid_mask.float()).sum(dim=1)  # [batch_size]
-
-        # 计算ss_tot（总平方和）
-        lbl_centered = lbl_filled - lbl_mean  # [batch_size, seq_len]
-        lbl_centered_sq = lbl_centered ** 2
-        ss_tot = (lbl_centered_sq * valid_mask.float()).sum(dim=1)  # [batch_size]
-
-        # 计算R²
-        r2 = 1 - (ss_res / (ss_tot + 1e-8))  # [batch_size]
-
-        # 只保留有效序列（至少有1个有效点）
-        valid_sequences = valid_counts.squeeze() > 0  # [batch_size]
-        r2_valid = r2[valid_sequences]
-        r2_mean = r2_valid.mean() if len(r2_valid) > 0 else torch.tensor(0.0, device=r2.device)
-
-        # ============ 3. Normalized MAE: 向量化计算 ============
-        # 计算每个序列的label range（使用masked操作）
-        # 对于min，将无效位置设为inf；对于max，将无效位置设为-inf
-        lbl_for_max = torch.where(valid_mask, lbl_filled,
-                                  torch.full_like(lbl_filled, -float('inf')))
-        lbl_for_min = torch.where(valid_mask, lbl_filled,
-                                  torch.full_like(lbl_filled, float('inf')))
-
-        lbl_max = lbl_for_max.max(dim=1, keepdim=True)[0]  # [batch_size, 1]
-        lbl_min = lbl_for_min.min(dim=1, keepdim=True)[0]  # [batch_size, 1]
-        label_range = lbl_max - lbl_min  # [batch_size, 1]
-
-        # 计算MAE
-        abs_diff = torch.abs(lbl_filled - est_filled)  # [batch_size, seq_len]
-        mae_sum = (abs_diff * valid_mask.float()).sum(dim=1, keepdim=True)  # [batch_size, 1]
-        mae = mae_sum / (valid_counts + 1e-8)  # [batch_size, 1]
-
-        # 归一化为百分数
-        mae_percent = (mae / (label_range + 1e-8)) * 100.0  # [batch_size, 1]
-
-        # 只保留有效序列
-        mae_percent_valid = mae_percent.squeeze()[valid_sequences]
-        mae_percent_mean = mae_percent_valid.mean() if len(mae_percent_valid) > 0 else torch.tensor(0.0,
-                                                                                                    device=mae_percent.device)
-
-        # ============ 保存结果 ============
-        metrics[f"output_{j}"] = {
-            "rmse": rmse.item(),
-            "r2": r2_mean.item(),
-            "mae_percent": mae_percent_mean.item(),
-            "count": valid_sequences.sum().item()
-        }
 
     return metrics
 
@@ -395,14 +455,13 @@ def validate(model: nn.Module,
              label_names: List[str],
              device: torch.device,
              model_type: str,
-             config) -> Tuple[dict, float]:
+             config,
+             reconstruction_method: str = "only_first") -> Tuple[dict, float]:
     """
-    完全优化的验证函数
+    验证函数 - 在完整序列上计算指标
 
-    改进：
-    1. Transformer使用完全向量化计算（无Python循环）
-    2. 根据模型类型采用不同的指标计算策略
-    3. MAE以百分数形式显示
+    参数:
+        reconstruction_method: 'only_first' 或 'average'
     """
     model.eval()
     criterion = nn.MSELoss()
@@ -411,15 +470,15 @@ def validate(model: nn.Module,
     num_batches = 0
     num_outputs = len(label_names)
 
-    # 初始化指标累积器
-    metrics_accumulator = {
-        f"output_{i}": {"rmse": 0.0, "r2": 0.0, "mae_percent": 0.0, "count": 0}
-        for i in range(num_outputs)
-    }
-
     with torch.no_grad():
         if model_type == 'TCN':
             # TCN: 逐试验处理长序列
+            # 初始化指标累积器
+            metrics_accumulator = {
+                f"output_{i}": {"rmse": 0.0, "r2": 0.0, "mae_percent": 0.0, "count": 0}
+                for i in range(num_outputs)
+            }
+
             for batch_data in dataloader:
                 input_data, label_data, trial_lengths = batch_data
                 input_data = input_data.to(device)
@@ -478,12 +537,21 @@ def validate(model: nn.Module,
                         total_loss += loss.item()
                         num_batches += 1
 
+            # 计算平均指标
+            for j in range(num_outputs):
+                count = metrics_accumulator[f"output_{j}"]["count"]
+                if count > 0:
+                    metrics_accumulator[f"output_{j}"]["rmse"] /= count
+                    metrics_accumulator[f"output_{j}"]["r2"] /= count
+                    metrics_accumulator[f"output_{j}"]["mae_percent"] /= count
+
         else:
-            # Transformer: 收集所有预测和标签
+            # Transformer: 收集所有预测和标签，然后重组序列
             all_estimates = []
             all_labels = []
+            trial_info = []  # (trial_idx, input_start_idx, seq_len)
 
-            for batch_data in dataloader:
+            for batch_idx, batch_data in enumerate(dataloader):
                 if model_type == 'GenerativeTransformer':
                     input_data, shifted_label_data, label_data = batch_data
                     input_data = input_data.to(device)
@@ -505,6 +573,14 @@ def validate(model: nn.Module,
                 all_estimates.append(estimates)
                 all_labels.append(label_data)
 
+                # 记录trial信息 - 需要从dataset获取
+                batch_size = estimates.size(0)
+                for i in range(batch_size):
+                    idx = batch_idx * dataloader.batch_size + i
+                    if idx < len(dataloader.dataset):
+                        trial_idx, input_start_idx = dataloader.dataset.sequences[idx]
+                        trial_info.append((trial_idx, input_start_idx, config.sequence_length))
+
                 # 计算损失
                 valid_mask = ~torch.isnan(estimates) & ~torch.isnan(label_data)
                 if valid_mask.sum() > 0:
@@ -512,26 +588,23 @@ def validate(model: nn.Module,
                     total_loss += loss.item()
                     num_batches += 1
 
-            # Concatenate并计算指标
+            # Concatenate所有批次的结果
             all_estimates = torch.cat(all_estimates, dim=0)
             all_labels = torch.cat(all_labels, dim=0)
 
-            # 使用完全向量化的函数计算指标
-            metrics_accumulator = compute_metrics_transformer_vectorized(
-                all_estimates, all_labels, num_outputs
+            # 重组序列
+            print(f"使用 '{reconstruction_method}' 方法重组序列...")
+            reconstructed_estimates, reconstructed_labels = reconstruct_sequences_from_predictions(
+                all_estimates, all_labels, trial_info, method=reconstruction_method
+            )
+
+            # 在完整序列上计算指标
+            metrics_accumulator = compute_metrics_on_sequences(
+                reconstructed_estimates, reconstructed_labels, num_outputs
             )
 
     # 计算平均
     avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
-
-    # TCN计算平均指标
-    if model_type == 'TCN':
-        for j in range(num_outputs):
-            count = metrics_accumulator[f"output_{j}"]["count"]
-            if count > 0:
-                metrics_accumulator[f"output_{j}"]["rmse"] /= count
-                metrics_accumulator[f"output_{j}"]["r2"] /= count
-                metrics_accumulator[f"output_{j}"]["mae_percent"] /= count
 
     # 构建结果字典
     result_dict = {}
@@ -648,66 +721,98 @@ def main():
     device = torch.device(args.device)
     print(f"使用设备: {device}")
     print(f"模型类型: {config.model_type}")
-    print(f"DataLoader工作进程数: {args.num_workers}")
 
+    # 获取reconstruction_method（仅对Transformer模型有效）
+    reconstruction_method = getattr(config, 'reconstruction_method', 'only_first')
+    if config.model_type in ['Transformer', 'GenerativeTransformer']:
+        print(f"序列重组方法: {reconstruction_method}")
+
+    # 创建保存目录
     save_dir = create_save_directory(args.config_path, config.model_type)
     copy_config_file(args.config_path, save_dir)
 
+    # 创建日志文件
     train_log_path = os.path.join(save_dir, "train_log.txt")
-    val_log_path = os.path.join(save_dir, "validation_log.txt")
+    val_log_path = os.path.join(save_dir, "val_log.txt")
 
     start_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     log_to_file(train_log_path, f"训练开始时间: {start_time}")
-    log_to_file(train_log_path, f"配置文件: {args.config_path}")
     log_to_file(train_log_path, f"模型类型: {config.model_type}")
+    log_to_file(train_log_path, f"设备: {device}")
     log_to_file(train_log_path, f"随机种子: {config.random_seed}")
-    log_to_file(train_log_path, f"设备: {device}\n")
+    if config.model_type in ['Transformer', 'GenerativeTransformer']:
+        log_to_file(train_log_path, f"序列重组方法: {reconstruction_method}")
+    log_to_file(train_log_path, f"{'=' * 60}")
 
+    # 创建模型
+    model, start_epoch = create_model(config, device, args.resume)
+
+    # 替换配置中的通配符
     input_names = [name.replace("*", config.side) for name in config.input_names]
     label_names = [name.replace("*", config.side) for name in config.label_names]
 
-    # 根据模型类型选择数据加载器和collate函数
-    if config.model_type in ['Transformer', 'GenerativeTransformer']:
-        seq_len = config.gen_sequence_length if config.model_type == 'GenerativeTransformer' else config.sequence_length
-        output_seq_len = getattr(config, 'output_sequence_length', seq_len)  # 新增：输出序列长度
+    # 根据模型类型加载数据集
+    if config.model_type in ["Transformer", "GenerativeTransformer"]:
+        seq_len = config.gen_sequence_length if config.model_type == "GenerativeTransformer" else config.sequence_length
+        output_seq_len = getattr(config, 'output_sequence_length', seq_len)
 
-        print(f"加载{config.model_type}训练数据集...")
+        print(f"\n加载{config.model_type}训练数据集...")
         train_dataset = SequenceDataset(
             data_dir=config.data_dir,
             input_names=input_names,
             label_names=label_names,
             side=config.side,
             sequence_length=seq_len,
-            output_sequence_length=output_seq_len,  # 新增
+            output_sequence_length=output_seq_len,
             model_delays=config.model_delays,
             participant_masses=config.participant_masses,
             device=device,
             mode='train',
             model_type=config.model_type,
-            start_token_value=config.start_token_value if config.model_type == 'GenerativeTransformer' else 0.0,
+            start_token_value=config.start_token_value if config.model_type == "GenerativeTransformer" else 0.0,
             remove_nan=True
         )
 
-        print(f"加载{config.model_type}测试数据集...")
+        print(f"\n加载{config.model_type}测试数据集...")
         test_dataset = SequenceDataset(
             data_dir=config.data_dir,
             input_names=input_names,
             label_names=label_names,
             side=config.side,
             sequence_length=seq_len,
-            output_sequence_length=output_seq_len,  # 新增
+            output_sequence_length=output_seq_len,
             model_delays=config.model_delays,
             participant_masses=config.participant_masses,
             device=device,
             mode='test',
             model_type=config.model_type,
-            start_token_value=config.start_token_value if config.model_type == 'GenerativeTransformer' else 0.0,
+            start_token_value=config.start_token_value if config.model_type == "GenerativeTransformer" else 0.0,
             remove_nan=True
         )
 
-        collate_fn = collate_fn_generative if config.model_type == 'GenerativeTransformer' else collate_fn_predictor
+        collate_fn = collate_fn_generative if config.model_type == "GenerativeTransformer" else collate_fn_predictor
+
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=config.batch_size,
+            shuffle=True,
+            collate_fn=collate_fn,
+            num_workers=args.num_workers,
+            pin_memory=True if device.type == 'cuda' else False
+        )
+
+        test_batch_size = getattr(config, 'test_batch_size', config.batch_size)
+        test_loader = DataLoader(
+            test_dataset,
+            batch_size=test_batch_size,
+            shuffle=False,
+            collate_fn=collate_fn,
+            num_workers=args.num_workers,
+            pin_memory=True if device.type == 'cuda' else False
+        )
+
     else:  # TCN
-        print("加载TCN训练数据集...")
+        print(f"\n加载TCN训练数据集...")
         train_dataset = TcnDataset(
             data_dir=config.data_dir,
             input_names=input_names,
@@ -719,7 +824,7 @@ def main():
             load_to_device=False
         )
 
-        print("加载TCN测试数据集...")
+        print(f"\n加载TCN测试数据集...")
         test_dataset = TcnDataset(
             data_dir=config.data_dir,
             input_names=input_names,
@@ -731,34 +836,26 @@ def main():
             load_to_device=False
         )
 
-        collate_fn = collate_fn_tcn
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=1,
+            shuffle=True,
+            collate_fn=collate_fn_tcn,
+            num_workers=0
+        )
 
-    print(f"训练集大小: {len(train_dataset)}, 测试集大小: {len(test_dataset)}")
+        test_loader = DataLoader(
+            test_dataset,
+            batch_size=1,
+            shuffle=False,
+            collate_fn=collate_fn_tcn,
+            num_workers=0
+        )
 
-    # 创建DataLoader
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=config.batch_size,
-        shuffle=True,
-        collate_fn=collate_fn,
-        num_workers=args.num_workers,
-        pin_memory=True if args.num_workers > 0 and device.type == 'cuda' else False
-    )
+    print(f"训练集大小: {len(train_dataset)}")
+    print(f"测试集大小: {len(test_dataset)}")
 
-    # 使用独立的测试批次大小
-    test_batch_size = getattr(config, 'test_batch_size', config.batch_size)
-
-    test_loader = DataLoader(
-        test_dataset,
-        batch_size=test_batch_size,  # 修改：使用test_batch_size
-        shuffle=False,
-        collate_fn=collate_fn,
-        num_workers=args.num_workers,
-        pin_memory=True if args.num_workers > 0 and device.type == 'cuda' else False
-    )
-
-    model, start_epoch = create_model(config, device, args.resume)
-
+    # 创建优化器和调度器
     optimizer = optim.Adam(
         model.parameters(),
         lr=config.learning_rate,
@@ -796,7 +893,10 @@ def main():
     print("=" * 60)
     print("训练前初始验证 (Epoch 0)...")
     print("=" * 60)
-    initial_metrics, initial_loss = validate(model, test_loader, label_names, device, config.model_type, config)
+    initial_metrics, initial_loss = validate(
+        model, test_loader, label_names, device,
+        config.model_type, config, reconstruction_method
+    )
 
     initial_log_content = f"\n{'=' * 60}\n"
     initial_log_content += "=== 训练前初始验证结果 (Epoch 0) ===\n"
@@ -910,7 +1010,10 @@ def main():
         # 验证
         if (epoch + 1) % config.val_interval == 0:
             print(f"\n在测试集上进行验证 (Epoch {epoch + 1})...")
-            val_metrics, val_loss = validate(model, test_loader, label_names, device, config.model_type, config)
+            val_metrics, val_loss = validate(
+                model, test_loader, label_names, device,
+                config.model_type, config, reconstruction_method
+            )
             scheduler.step(val_loss)
 
             val_log_content = f"\n=== Epoch {epoch + 1} 验证结果 ===\n"
