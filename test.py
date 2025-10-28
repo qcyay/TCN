@@ -87,6 +87,79 @@ def load_model(model_path: str, device: torch.device):
     return model, model_type
 
 
+def reconstruct_sequences_optimized(
+        all_estimates: torch.Tensor,
+        all_labels: torch.Tensor,
+        trial_sequence_counts: List[int],
+        method: str = "only_first"
+) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
+    """
+    优化版本：利用测试数据不shuffle的特性，高效重组序列
+
+    参数:
+        all_estimates: [N, num_outputs, output_seq_len] 所有短序列的预测（按trial顺序）
+        all_labels: [N, num_outputs, output_seq_len] 所有短序列的标签（按trial顺序）
+        trial_sequence_counts: List[int] 每个trial的子序列数量
+        method: 重组方法 'only_first' 或 'average'
+
+    返回:
+        reconstructed_estimates: List[Tensor[num_outputs, trial_len]] 每个trial的完整序列预测
+        reconstructed_labels: List[Tensor[num_outputs, trial_len]] 每个trial的完整序列标签
+    """
+    reconstructed_estimates = []
+    reconstructed_labels = []
+
+    # 按trial_sequence_counts分割预测和标签
+    estimates_splits = torch.split(all_estimates, trial_sequence_counts, dim=0)
+    labels_splits = torch.split(all_labels, trial_sequence_counts, dim=0)
+
+    if method == "only_first":
+        # 每组只取第一个时间步（索引0），然后沿着时间维度拼接
+        for trial_est, trial_lbl in zip(estimates_splits, labels_splits):
+            # trial_est: [num_subsequences, num_outputs, output_seq_len]
+            # 取每个子序列的第一个值: [:, :, 0] -> [num_subsequences, num_outputs]
+            # 转置得到: [num_outputs, num_subsequences]
+            reconstructed_estimates.append(trial_est[:, :, 0].t().contiguous())
+            reconstructed_labels.append(trial_lbl[:, :, 0].t().contiguous())
+
+    elif method == "average":
+        # 使用unfold展开然后平均的方式
+        for trial_est, trial_lbl in zip(estimates_splits, labels_splits):
+            # trial_est: [num_subsequences, num_outputs, output_seq_len]
+            num_subseqs, num_outputs, output_seq_len = trial_est.shape
+
+            # 完整序列长度 = 子序列数量 + output_seq_len - 1
+            # （因为最后一个子序列也会预测output_seq_len个点）
+            full_len = num_subseqs + output_seq_len - 1
+
+            # 为每个输出通道分别处理
+            est_full = torch.zeros(num_outputs, full_len, device=trial_est.device)
+            lbl_full = torch.zeros(num_outputs, full_len, device=trial_lbl.device)
+            count = torch.zeros(num_outputs, full_len, device=trial_est.device)
+
+            # 生成索引矩阵用于累加
+            # 每个子序列i对应的位置是 i, i+1, ..., i+output_seq_len-1
+            for i in range(num_subseqs):
+                # 对应的位置索引
+                positions = torch.arange(i, i + output_seq_len, device=trial_est.device)
+                # 使用scatter_add累加
+                est_full.index_add_(1, positions, trial_est[i])
+                lbl_full.index_add_(1, positions, trial_lbl[i])
+                count.index_add_(1, positions, torch.ones(num_outputs, output_seq_len, device=trial_est.device))
+
+            # 计算平均值
+            est_avg = est_full / count
+            lbl_avg = lbl_full / count
+
+            reconstructed_estimates.append(est_avg)
+            reconstructed_labels.append(lbl_avg)
+
+    else:
+        raise ValueError(f"未知的重组方法: {method}")
+
+    return reconstructed_estimates, reconstructed_labels
+
+
 def reconstruct_sequences_from_predictions(
         all_estimates: torch.Tensor,
         all_labels: torch.Tensor,
@@ -366,7 +439,6 @@ def main():
         # 进行测试 - 收集所有预测和标签
         all_estimates = []
         all_labels = []
-        trial_info = []  # (trial_idx, input_start_idx, seq_len)
 
         print("\n开始预测...")
         with torch.no_grad():
@@ -383,14 +455,6 @@ def main():
 
                         all_estimates.append(estimates)
                         all_labels.append(label_data)
-
-                        # 记录trial信息
-                        batch_size = estimates.size(0)
-                        for i in range(batch_size):
-                            idx = batch_idx * test_loader.batch_size + i
-                            if idx < len(test_dataset):
-                                trial_idx, input_start_idx = test_dataset.sequences[idx]
-                                trial_info.append((trial_idx, input_start_idx, config.sequence_length))
                 else:
                     print("使用Teacher Forcing模式...")
                     for batch_idx, batch_data in enumerate(test_loader):
@@ -407,14 +471,6 @@ def main():
 
                         all_estimates.append(estimates)
                         all_labels.append(label_data)
-
-                        # 记录trial信息
-                        batch_size = estimates.size(0)
-                        for i in range(batch_size):
-                            idx = batch_idx * test_loader.batch_size + i
-                            if idx < len(test_dataset):
-                                trial_idx, input_start_idx = test_dataset.sequences[idx]
-                                trial_info.append((trial_idx, input_start_idx, config.sequence_length))
             else:  # Transformer预测模型
                 for batch_idx, (input_data, label_data) in enumerate(test_loader):
                     input_data = input_data.to(device)
@@ -425,24 +481,18 @@ def main():
                     all_estimates.append(estimates)
                     all_labels.append(label_data)
 
-                    # 记录trial信息
-                    batch_size = estimates.size(0)
-                    for i in range(batch_size):
-                        idx = batch_idx * test_loader.batch_size + i
-                        if idx < len(test_dataset):
-                            trial_idx, input_start_idx = test_dataset.sequences[idx]
-                            trial_info.append((trial_idx, input_start_idx, config.sequence_length))
-
         # 合并所有批次的结果
         all_estimates = torch.cat(all_estimates, dim=0)
         all_labels = torch.cat(all_labels, dim=0)
 
         print(f"预测完成! 共 {all_estimates.size(0)} 个短序列")
 
-        # 重组序列
-        print(f"\n使用 '{reconstruction_method}' 方法重组序列...")
-        reconstructed_estimates, reconstructed_labels = reconstruct_sequences_from_predictions(
-            all_estimates, all_labels, trial_info, method=reconstruction_method
+        # 使用优化的重组方法
+        print(f"\n使用优化的 '{reconstruction_method}' 方法重组序列...")
+        reconstructed_estimates, reconstructed_labels = reconstruct_sequences_optimized(
+            all_estimates, all_labels,
+            test_dataset.trial_sequence_counts,
+            method=reconstruction_method
         )
 
         print(f"重组完成! 共 {len(reconstructed_estimates)} 个完整序列")

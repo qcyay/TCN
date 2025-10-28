@@ -90,6 +90,9 @@ class SequenceDataset(Dataset):
         print(f"生成序列索引...")
         self.sequences = self._generate_sequences()
 
+        # 记录每个trial生成的子序列数量（用于高效重组）
+        self.trial_sequence_counts = self._compute_trial_sequence_counts()
+
         print(f"数据集初始化完成 - 模式: {self.mode}, "
               f"试验数量: {len(self.trial_names)}, "
               f"序列数量: {len(self.sequences)}")
@@ -384,6 +387,16 @@ class SequenceDataset(Dataset):
                 sequences.append((trial_idx, input_start_idx))
 
         return sequences
+
+    def _compute_trial_sequence_counts(self):
+        """
+        计算每个trial生成的子序列数量
+        返回列表，索引对应trial_idx，值为该trial的子序列数量
+        """
+        counts = [0] * len(self.trial_names)
+        for trial_idx, _ in self.sequences:
+            counts[trial_idx] += 1
+        return counts
 
 
 # 使用示例
