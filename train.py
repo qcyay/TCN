@@ -652,18 +652,30 @@ def validate(model: nn.Module,
                     est_trial = estimates[i, :, model_history:trial_lengths[i]]
                     lbl_trial = label_data[i, :, model_history:trial_lengths[i]]
 
-                    # 应用延迟
+                    # 找到最大delay，以此确定所有通道的统一有效长度
+                    max_delay = max(config.model_delays)
+                    valid_length = est_trial.size(1) - max_delay
+
+                    if valid_length <= 0:
+                        # 如果序列太短，跳过这个trial
+                        continue
+
+                    # 应用延迟并统一长度
                     valid_masks = []
                     est_shifted = []
                     lbl_shifted = []
 
                     for j in range(num_outputs):
-                        est_j = est_trial[j]
-                        lbl_j = lbl_trial[j]
+                        delay = config.model_delays[j]
 
-                        if config.model_delays[j] != 0:
-                            est_j = est_j[config.model_delays[j]:]
-                            lbl_j = lbl_j[:-config.model_delays[j]]
+                        # 预测值：从max_delay位置开始取，确保所有通道对齐
+                        est_j = est_trial[j, max_delay:]
+
+                        # 标签：根据当前通道的delay进行偏移
+                        # delay较小的通道，标签需要从更靠后的位置开始
+                        lbl_start = max_delay - delay
+                        lbl_end = lbl_start + valid_length
+                        lbl_j = lbl_trial[j, lbl_start:lbl_end]
 
                         valid_mask_j = ~torch.isnan(est_j) & ~torch.isnan(lbl_j)
 
@@ -1130,13 +1142,27 @@ def main():
                 model_history = model.get_effective_history()
 
                 for i in range(len(trial_lengths)):
-                    for j in range(config.output_size):
-                        est = estimates[i, j, model_history:trial_lengths[i]]
-                        lbl = label_data[i, j, model_history:trial_lengths[i]]
+                    est_trial = estimates[i, :, model_history:trial_lengths[i]]
+                    lbl_trial = label_data[i, :, model_history:trial_lengths[i]]
 
-                        if config.model_delays[j] != 0:
-                            est = est[config.model_delays[j]:]
-                            lbl = lbl[:-config.model_delays[j]]
+                    # 找到最大delay
+                    max_delay = max(config.model_delays)
+                    valid_length = est_trial.size(1) - max_delay
+
+                    if valid_length <= 0:
+                        # 如果序列太短，跳过这个trial
+                        continue
+
+                    for j in range(config.output_size):
+                        delay = config.model_delays[j]
+
+                        # 预测值：从max_delay位置开始取
+                        est = est_trial[j, max_delay:]
+
+                        # 标签：根据当前通道的delay进行偏移
+                        lbl_start = max_delay - delay
+                        lbl_end = lbl_start + valid_length
+                        lbl = lbl_trial[j, lbl_start:lbl_end]
 
                         valid_mask = ~torch.isnan(est) & ~torch.isnan(lbl)
                         est_valid = est[valid_mask]

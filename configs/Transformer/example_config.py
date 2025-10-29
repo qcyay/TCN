@@ -3,8 +3,8 @@ import torch
 
 # ==================== 模型选择 ====================
 # 模型类型: 'TCN', 'Transformer', 或 'GenerativeTransformer'
-model_type = 'TCN'
-# model_type = 'Transformer'
+# model_type = 'TCN'
+model_type = 'Transformer'
 # model_type = 'GenerativeTransformer'
 
 # ==================== 数据配置 ====================

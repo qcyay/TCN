@@ -155,10 +155,10 @@ reconstruction_method = 'only_first'
 # ==================== 训练配置 ====================
 
 # 训练轮数
-num_epochs = 2000
+num_epochs = 500
 
 # 训练批次大小
-batch_size = 32
+batch_size = 256
 
 # 测试批次大小（可以与训练批次大小不同）
 test_batch_size = 2048
@@ -173,7 +173,7 @@ weight_decay = 1e-5
 val_interval = 20
 
 # 模型保存间隔(每隔多少轮保存一次模型)
-save_interval = 50
+save_interval = 20
 
 # ==================== 学习率调度器配置 ====================
 
