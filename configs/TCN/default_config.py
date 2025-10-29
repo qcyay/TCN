@@ -141,10 +141,13 @@ teacher_forcing_ratio = 1.0
 # ==================== 训练配置 ====================
 
 # 训练轮数
-num_epochs = 1000
+num_epochs = 200
 
 # 批次大小
-batch_size = 32
+batch_size = 64
+
+# 测试批次大小（可以与训练批次大小不同）
+test_batch_size = 64
 
 # 学习率
 learning_rate = 0.001
@@ -153,7 +156,7 @@ learning_rate = 0.001
 weight_decay = 1e-5
 
 # 验证间隔(每隔多少轮在测试集上验证一次)
-val_interval = 10
+val_interval = 20
 
 # 模型保存间隔(每隔多少轮保存一次模型)
 save_interval = 50
@@ -172,7 +175,7 @@ min_lr = 1e-6
 # ==================== 早停配置 ====================
 
 # 早停耐心值
-early_stopping_patience = 50
+early_stopping_patience = 20
 
 # 早停最小改善幅度
 early_stopping_min_delta = 0.0

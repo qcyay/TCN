@@ -22,7 +22,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--config_path", type=str, default="configs.default_config",
                     help="配置文件路径")
 parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu",
-                    help="训练设备 (cpu/cuda)")
+                    help="训练设备 (cpu, cuda, 0, 1, 2, 3, ...)")
 parser.add_argument("--resume", type=str, default=None,
                     help="恢复训练的模型路径")
 parser.add_argument("--num_workers", type=int, default=32,
@@ -31,6 +31,94 @@ args = parser.parse_args()
 
 # 加载配置
 config = load_config(args.config_path)
+
+
+def setup_device(device_str: str) -> torch.device:
+    """
+    设置并验证训练设备
+
+    参数:
+        device_str: 设备字符串
+            - 'cpu': 使用CPU
+            - 'cuda': 使用默认GPU (GPU 0)
+            - '0', '1', '2', '3', ...: 直接指定GPU编号
+            - 'cuda:0', 'cuda:1', ...: 也支持这种格式
+
+    返回:
+        torch.device: 验证后的设备对象
+    """
+    # 显示可用的GPU信息
+    if torch.cuda.is_available():
+        num_gpus = torch.cuda.device_count()
+        print(f"\n可用GPU数量: {num_gpus}")
+        for i in range(num_gpus):
+            props = torch.cuda.get_device_properties(i)
+            print(f"  GPU {i}: {props.name} ({props.total_memory / 1024 ** 3:.1f} GB)")
+    else:
+        print("\n未检测到可用的GPU")
+
+    # 解析设备字符串
+    device_str = device_str.lower().strip()
+
+    if device_str == "cpu":
+        print(f"\n使用设备: CPU")
+        return torch.device("cpu")
+
+    # 处理纯数字（如 '0', '1', '2', '3'）
+    if device_str.isdigit():
+        if not torch.cuda.is_available():
+            print(f"警告: CUDA不可用，回退到CPU")
+            return torch.device("cpu")
+
+        gpu_id = int(device_str)
+        num_gpus = torch.cuda.device_count()
+
+        if gpu_id >= num_gpus or gpu_id < 0:
+            print(f"警告: GPU {gpu_id} 不存在（可用GPU: 0-{num_gpus - 1}），使用 GPU 0")
+            gpu_id = 0
+
+        device = torch.device(f"cuda:{gpu_id}")
+        print(f"\n使用设备: GPU {gpu_id} - {torch.cuda.get_device_properties(gpu_id).name}")
+
+        # 设置当前设备
+        torch.cuda.set_device(gpu_id)
+
+        return device
+
+    # 处理 cuda 相关设备
+    if device_str.startswith("cuda"):
+        if not torch.cuda.is_available():
+            print(f"警告: CUDA不可用，回退到CPU")
+            return torch.device("cpu")
+
+        # 解析GPU编号
+        if device_str == "cuda":
+            gpu_id = 0
+        else:
+            try:
+                # 提取 cuda:X 中的 X
+                gpu_id = int(device_str.split(':')[1])
+            except (IndexError, ValueError):
+                print(f"警告: 无效的设备字符串 '{device_str}'，使用 GPU 0")
+                gpu_id = 0
+
+        # 验证GPU编号
+        num_gpus = torch.cuda.device_count()
+        if gpu_id >= num_gpus or gpu_id < 0:
+            print(f"警告: GPU {gpu_id} 不存在（可用GPU: 0-{num_gpus - 1}），使用 GPU 0")
+            gpu_id = 0
+
+        device = torch.device(f"cuda:{gpu_id}")
+        print(f"\n使用设备: GPU {gpu_id} - {torch.cuda.get_device_properties(gpu_id).name}")
+
+        # 设置当前设备
+        torch.cuda.set_device(gpu_id)
+
+        return device
+
+    # 未知设备类型
+    print(f"警告: 未知的设备类型 '{device_str}'，使用CPU")
+    return torch.device("cpu")
 
 
 def set_seed(seed):
@@ -782,8 +870,8 @@ def main():
     # 设置随机种子
     set_seed(config.random_seed)
 
-    device = torch.device(args.device)
-    print(f"使用设备: {device}")
+    # 设置并验证设备
+    device = setup_device(args.device)
     print(f"模型类型: {config.model_type}")
 
     # 获取reconstruction_method（仅对Transformer模型有效）
