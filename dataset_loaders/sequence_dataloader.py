@@ -211,21 +211,37 @@ class SequenceDataset(Dataset):
 
         return trial_names
 
-    def _find_nan_cutoff(self, df: pd.DataFrame, columns: List[str]) -> int:
-        """在指定列中查找第一个包含NaN的行索引"""
+    def _find_valid_range(self, df: pd.DataFrame, columns: List[str]) -> Tuple[int, int]:
+        """
+        在指定列中查找有效数据范围(不含NaN的行范围)
+
+        重要: 此方法会检测并移除文件**开头**和**结尾**的NaN行
+
+        参数:
+            df: DataFrame数据
+            columns: 要检查的列名列表
+
+        返回:
+            (start_index, end_index): 有效数据的起始和结束索引(前闭后开区间)
+            如果所有行都包含NaN,返回 (0, 0)
+        """
         valid_columns = [col for col in columns if col in df.columns]
 
         if not valid_columns:
-            return len(df)
+            return 0, len(df)
 
         subset_df = df[valid_columns]
         nan_mask = subset_df.isna().any(axis=1)
-        nan_indices = nan_mask[nan_mask].index.tolist()
+        valid_mask = ~nan_mask
+        valid_indices = valid_mask[valid_mask].index.tolist()
 
-        if nan_indices:
-            return nan_indices[0]
-        else:
-            return len(df)
+        if not valid_indices:
+            return 0, 0
+
+        start_index = valid_indices[0]
+        end_index = valid_indices[-1] + 1
+
+        return start_index, end_index
 
     def _preload_all_data(self):
         """
@@ -279,24 +295,29 @@ class SequenceDataset(Dataset):
 
         # 加载数据
         body_mass = self.participant_masses.get(participant, 1.0)
-        input_data, cutoff_length = self._load_input_data(input_file_path, body_mass)
-        label_data = self._load_label_data(label_file_path, cutoff_length)
+        input_data, valid_range = self._load_input_data(input_file_path, body_mass)
+        label_data = self._load_label_data(label_file_path, valid_range)
 
         # 注意：不在这里应用延迟，延迟会在生成序列索引时处理
         return input_data, label_data
 
-    def _load_input_data(self, file_path: str, body_mass: float) -> Tuple[torch.Tensor, Optional[int]]:
+    def _load_input_data(self, file_path: str, body_mass: float) -> Tuple[torch.Tensor, Optional[Tuple[int, int]]]:
         '''加载并预处理输入数据'''
         df = pd.read_csv(file_path)
         original_length = len(df)
 
         # 如果启用NaN移除，检测并截断
-        cutoff_length = None
+        valid_range = None
         if self.remove_nan:
-            cutoff_index = self._find_nan_cutoff(df, self.input_names)
-            if cutoff_index < original_length:
-                df = df.iloc[:cutoff_index].copy()
-                cutoff_length = cutoff_index
+            start_idx, end_idx = self._find_valid_range(df, self.input_names)
+            if end_idx == 0:
+                # 所有行都是NaN
+                print(f"  警告: {file_path} 所有行都包含NaN")
+                return torch.zeros((len(self.input_names), 0), dtype=torch.float32), (0, 0)
+
+            if start_idx > 0 or end_idx < original_length:
+                df = df.iloc[start_idx:end_idx].copy()
+                valid_range = (start_idx, end_idx)
 
         # 体重标准化压力鞋垫数据
         if "insole_l_force_y" in df.columns:
@@ -325,16 +346,18 @@ class SequenceDataset(Dataset):
         extracted_data = df[self.input_names].values
         input_data = torch.tensor(extracted_data, dtype=torch.float32).transpose(0, 1)
 
-        return input_data, cutoff_length
+        return input_data, valid_range
 
-    def _load_label_data(self, file_path: str, cutoff_length: Optional[int] = None) -> torch.Tensor:
+    def _load_label_data(self, file_path: str, valid_range: Optional[Tuple[int, int]] = None) -> torch.Tensor:
         '''加载标签数据'''
         df = pd.read_csv(file_path)
-        original_length = len(df)
 
-        # 如果指定了截断长度，截断标签数据以匹配输入数据
-        if cutoff_length is not None and cutoff_length < original_length:
-            df = df.iloc[:cutoff_length].copy()
+        # 如果指定了有效范围，截断标签数据以匹配输入数据
+        if valid_range is not None:
+            start_idx, end_idx = valid_range
+            if end_idx == 0:
+                return torch.zeros((len(self.label_names), 0), dtype=torch.float32)
+            df = df.iloc[start_idx:end_idx].copy()
 
         # 检查是否有缺失的必需列
         missing_cols = [col for col in self.label_names if col not in df.columns]
@@ -397,56 +420,3 @@ class SequenceDataset(Dataset):
         for trial_idx, _ in self.sequences:
             counts[trial_idx] += 1
         return counts
-
-
-# 使用示例
-if __name__ == "__main__":
-    # 示例配置
-    config = {
-        "data_dir": "data/example",
-        "input_names": ["foot_imu_r_gyro_x", "foot_imu_r_gyro_y"],
-        "label_names": ["hip_flexion_r_moment", "knee_angle_r_moment"],
-        "side": "r",
-        "sequence_length": 50,
-        "output_sequence_length": 25,
-        "model_delays": [10, 0],  # 第一个输出延迟10步，第二个不延迟
-        "participant_masses": {"BT23": 67.23, "BT24": 77.79},
-        "device": torch.device("cuda" if torch.cuda.is_available() else "cpu"),
-        "mode": "train",
-        "remove_nan": True
-    }
-
-    print("=" * 60)
-    print("测试预测模型数据集")
-    print("=" * 60)
-    print("注意：每个输出通道会根据model_delays[i]从不同位置开始取标签")
-    print(f"  - 输出通道0 (hip): 从input_end + {config['model_delays'][0]} 开始")
-    print(f"  - 输出通道1 (knee): 从input_end + {config['model_delays'][1]} 开始")
-
-    # 创建预测模型数据集
-    pred_dataset = SequenceDataset(**config, model_type="Transformer")
-    print(f"\n训练集大小: {len(pred_dataset)}")
-
-    # 加载一个样本
-    input_seq, label_seq = pred_dataset[0]
-    print(f"输入序列形状: {input_seq.shape}")  # 应该是 [num_features, 50]
-    print(f"标签序列形状: {label_seq.shape}")  # 应该是 [2, 25]
-
-    print("\n" + "=" * 60)
-    print("测试生成式模型数据集")
-    print("=" * 60)
-    print("注意：生成式模型也需要考虑延迟！")
-    print(f"  - 输出通道0 (hip): 从input_end + {config['model_delays'][0]} 开始")
-    print(f"  - 输出通道1 (knee): 从input_end + {config['model_delays'][1]} 开始")
-
-    # 创建生成式模型数据集
-    gen_dataset = SequenceDataset(**config, model_type="GenerativeTransformer", start_token_value=0.0)
-    print(f"\n训练集大小: {len(gen_dataset)}")
-
-    # 加载一个样本
-    input_seq, shifted_label, label_seq = gen_dataset[0]
-    print(f"输入序列形状: {input_seq.shape}")  # 应该是 [num_features, 50]
-    print(f"Shifted标签形状: {shifted_label.shape}")  # 应该是 [2, 25]
-    print(f"目标标签形状: {label_seq.shape}")  # 应该是 [2, 25]
-    print(f"Shifted标签第一个值: {shifted_label[:, 0]}")
-    print(f"原始标签第一个值: {label_seq[:, 0]}")

@@ -1,5 +1,5 @@
 import os
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 import pandas as pd
 import torch
 from torch.utils.data import Dataset
@@ -18,7 +18,7 @@ class TcnDataset(Dataset):
                  mode: str = "train",
                  file_suffix: Dict[str, str] = None,
                  remove_nan: bool = True,
-                 load_to_device: bool = False):  # 新增：是否在__getitem__中加载到device
+                 load_to_device: bool = False):
         """
         初始化数据集，支持训练/测试模式和新文件结构
 
@@ -42,7 +42,7 @@ class TcnDataset(Dataset):
         self.device = device
         self.mode = mode.lower()
         self.remove_nan = remove_nan
-        self.load_to_device = load_to_device  # 新增
+        self.load_to_device = load_to_device
 
         # 设置文件后缀映射
         if file_suffix is None:
@@ -70,7 +70,7 @@ class TcnDataset(Dataset):
         load_mode = "GPU" if self.load_to_device else "CPU"
         print(f"数据集初始化完成 - 模式: {self.mode}, 试验数量: {len(self.trial_names)}, 加载模式: {load_mode}")
         if self.remove_nan:
-            print(f"NaN自动移除: 启用")
+            print(f"NaN自动移除: 启用 (将移除文件开头和结尾的NaN行)")
 
     def __len__(self):
         '''返回数据集中试验的总数'''
@@ -162,23 +162,26 @@ class TcnDataset(Dataset):
         print(f"找到 {len(trial_names)} 个试验")
         return trial_names
 
-    def _find_nan_cutoff(self, df: pd.DataFrame, columns: List[str]) -> int:
+    def _find_valid_range(self, df: pd.DataFrame, columns: List[str]) -> Tuple[int, int]:
         """
-        在指定列中查找第一个包含NaN的行索引
+        在指定列中查找有效数据范围(不含NaN的行范围)
+
+        重要: 此方法会检测并移除文件**开头**和**结尾**的NaN行
 
         参数:
             df: DataFrame数据
             columns: 要检查的列名列表
 
         返回:
-            cutoff_index: 截断索引，如果没有NaN则返回数据长度
+            (start_index, end_index): 有效数据的起始和结束索引(前闭后开区间)
+            如果所有行都包含NaN,返回 (0, 0)
         """
         # 检查指定列是否存在
         valid_columns = [col for col in columns if col in df.columns]
 
         if not valid_columns:
             print(f"    警告: 指定的列都不存在于数据中")
-            return len(df)
+            return 0, len(df)
 
         # 只检查有效列
         subset_df = df[valid_columns]
@@ -186,27 +189,34 @@ class TcnDataset(Dataset):
         # 检查每一行是否包含NaN
         nan_mask = subset_df.isna().any(axis=1)
 
-        # 找到第一个包含NaN的行
-        nan_indices = nan_mask[nan_mask].index.tolist()
+        # 找到所有不含NaN的行
+        valid_mask = ~nan_mask
+        valid_indices = valid_mask[valid_mask].index.tolist()
 
-        if nan_indices:
-            cutoff_index = nan_indices[0]
-            num_nan_rows = len(df) - cutoff_index
-            # print(f"    检测到NaN: 从第 {cutoff_index} 行开始, 将移除 {num_nan_rows} 行")
-            return cutoff_index
-        else:
-            return len(df)
+        if not valid_indices:
+            # 所有行都包含NaN
+            print(f"    警告: 所有行都包含NaN!")
+            return 0, 0
+
+        # 找到第一个和最后一个有效行
+        start_index = valid_indices[0]
+        end_index = valid_indices[-1] + 1  # +1 because we use [start:end) slicing
+
+        if start_index > 0 or end_index < len(df):
+            num_removed_front = start_index
+            num_removed_back = len(df) - end_index
+            # print(f"    检测到NaN: 移除前{num_removed_front}行, 后{num_removed_back}行")
+
+        return start_index, end_index
 
     def _load_trial_data(self, trial_name: str):
         '''
         从单个试验目录加载数据，适配新的文件命名格式
-        支持自动检测和移除包含NaN的行
+        支持自动检测和移除包含NaN的行（包括文件开头和结尾）
 
         参数:
             trial_name: 试验名称，格式为 "参与者/试验项目"
         '''
-        # print(f"加载试验数据: {trial_name}")
-
         # 构建完整的试验目录路径
         trial_dir = os.path.join(self.data_dir, self.mode, trial_name)
 
@@ -237,17 +247,17 @@ class TcnDataset(Dataset):
             raise FileNotFoundError(f"标签文件不存在: {label_file_path}")
 
         # 加载输入数据
-        input_data, input_cutoff = self._load_input_data(
+        input_data, valid_range = self._load_input_data(
             input_file_path,
             body_mass=self.participant_masses.get(participant, 1.0)
         )
 
-        # 加载标签数据（使用相同的截断长度）
-        label_data = self._load_label_data(label_file_path, cutoff_length=input_cutoff)
+        # 加载标签数据（使用相同的有效范围）
+        label_data = self._load_label_data(label_file_path, valid_range=valid_range)
 
         # 更新统计信息
         self.nan_removal_stats['trials_processed'] += 1
-        if input_cutoff is not None:
+        if valid_range is not None:
             self.nan_removal_stats['trials_with_nan'] += 1
 
         return input_data, label_data
@@ -255,29 +265,35 @@ class TcnDataset(Dataset):
     def _load_input_data(self, file_path: str, body_mass: float):
         '''
         加载并预处理输入数据CSV文件
-        支持自动检测和移除包含NaN的行
+        支持自动检测和移除包含NaN的行（包括文件开头和结尾）
 
         返回:
             input_data: 处理后的输入数据张量
-            cutoff_length: 截断后的数据长度（如果有截断），或None
+            valid_range: 有效数据范围（如果有截断），或None
         '''
         # 读取CSV文件
         df = pd.read_csv(file_path)
         original_length = len(df)
-        # print(f"  输入数据: {file_path}, 原始数据形状: {df.shape}")
 
         # 如果启用NaN移除，检测并截断
-        cutoff_length = None
+        valid_range = None
         if self.remove_nan:
-            cutoff_index = self._find_nan_cutoff(df, self.input_names)
+            start_idx, end_idx = self._find_valid_range(df, self.input_names)
 
-            if cutoff_index < original_length:
+            if end_idx == 0:
+                # 所有行都是NaN
+                print(f"  警告: {file_path} 所有行都包含NaN，跳过该文件")
+                # 返回空张量
+                target_device = self.device if self.load_to_device else torch.device('cpu')
+                empty_tensor = torch.zeros((1, len(self.input_names), 0), device=target_device)
+                return empty_tensor, (start_idx, end_idx)
+
+            if start_idx > 0 or end_idx < original_length:
                 # 需要截断
-                df = df.iloc[:cutoff_index].copy()
-                cutoff_length = cutoff_index
-                removed_rows = original_length - cutoff_index
+                df = df.iloc[start_idx:end_idx].copy()
+                valid_range = (start_idx, end_idx)
+                removed_rows = (start_idx) + (original_length - end_idx)
                 self.nan_removal_stats['total_rows_removed'] += removed_rows
-                # print(f"  截断后数据形状: {df.shape}")
 
         # 体重标准化压力鞋垫数据
         if "insole_l_force_y" in df.columns:
@@ -314,22 +330,27 @@ class TcnDataset(Dataset):
             device=target_device
         ).transpose(0, 1).unsqueeze(0).float()
 
-        return input_data, cutoff_length
+        return input_data, valid_range
 
-    def _load_label_data(self, file_path: str, cutoff_length: Optional[int] = None):
+    def _load_label_data(self, file_path: str, valid_range: Optional[Tuple[int, int]] = None):
         '''
         加载标签数据CSV文件
 
         参数:
             file_path: 标签文件路径
-            cutoff_length: 如果不为None，截断到指定长度以匹配输入数据
+            valid_range: 如果不为None，使用指定的有效范围以匹配输入数据
         '''
         df = pd.read_csv(file_path)
-        original_length = len(df)
 
-        # 如果指定了截断长度，截断标签数据以匹配输入数据
-        if cutoff_length is not None and cutoff_length < original_length:
-            df = df.iloc[:cutoff_length].copy()
+        # 如果指定了有效范围，使用该范围截断标签数据
+        if valid_range is not None:
+            start_idx, end_idx = valid_range
+            if end_idx == 0:
+                # 返回空张量
+                target_device = self.device if self.load_to_device else torch.device('cpu')
+                empty_tensor = torch.zeros((1, len(self.label_names), 0), device=target_device)
+                return empty_tensor
+            df = df.iloc[start_idx:end_idx].copy()
 
         # 检查是否有缺失的必需列
         missing_cols = [col for col in self.label_names if col not in df.columns]
@@ -354,7 +375,11 @@ class TcnDataset(Dataset):
         对试验数据进行零填充，使所有试验序列长度一致
         '''
         trial_sequence_lengths = [trial_data[0].shape[-1] for trial_data in data]
-        max_sequence_length = max(trial_sequence_lengths)
+        max_sequence_length = max(trial_sequence_lengths) if trial_sequence_lengths else 0
+
+        if max_sequence_length == 0:
+            # 所有序列都是空的
+            return data, trial_sequence_lengths
 
         # 对长度不足的试验进行填充
         for i in range(len(data)):
@@ -364,7 +389,7 @@ class TcnDataset(Dataset):
                 for j in range(len(data[i])):
                     padding = torch.zeros(
                         (1, data[i][j].shape[1], padding_length),
-                        device=data[i][j].device  # 使用数据本身的device
+                        device=data[i][j].device
                     )
                     data[i][j] = torch.cat((data[i][j], padding), dim=2)
 
@@ -389,41 +414,3 @@ class TcnDataset(Dataset):
             print(f"平均每个含NaN试验移除的行数: {avg_rows_removed:.1f}")
 
         print(f"{'=' * 60}\n")
-
-
-# 使用示例
-if __name__ == "__main__":
-    # 示例配置
-    config = {
-        "data_dir": "data",
-        "input_names": ["foot_imu_r_gyro_x", "foot_imu_r_gyro_y"],
-        "label_names": ["hip_flexion_r_moment", "knee_angle_r_moment"],
-        "side": "r",
-        "participant_masses": {"BT23": 67.23, "BT24": 77.79},
-        "device": torch.device("cuda" if torch.cuda.is_available() else "cpu"),
-        "mode": "train",
-        "remove_nan": True  # 启用NaN自动移除
-    }
-
-    # 创建训练数据集
-    train_dataset = TcnDataset(**config)
-    print(f"训练集大小: {len(train_dataset)}")
-
-    # 加载数据（这会触发NaN检测和移除）
-    sample_input, sample_label, lengths = train_dataset[1]
-    breakpoint()
-    print(f"输入数据形状: {sample_input.shape}")
-    print(f"标签数据形状: {sample_label.shape}")
-    print(f"序列长度: {lengths}")
-
-    # 打印NaN移除统计
-    train_dataset.print_nan_removal_summary()
-
-    # 创建测试数据集
-    test_config = config.copy()
-    test_config["mode"] = "test"
-    test_dataset = TcnDataset(**test_config)
-    print(f"测试集大小: {len(test_dataset)}")
-
-    # 打印测试集的NaN移除统计
-    test_dataset.print_nan_removal_summary()

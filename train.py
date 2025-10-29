@@ -1002,18 +1002,19 @@ def main():
 
         train_loader = DataLoader(
             train_dataset,
-            batch_size=1,
+            batch_size=config.batch_size,
             shuffle=True,
             collate_fn=collate_fn_tcn,
-            num_workers=0
+            num_workers=args.num_workers
         )
 
+        test_batch_size = getattr(config, 'test_batch_size', config.batch_size)
         test_loader = DataLoader(
             test_dataset,
-            batch_size=1,
+            batch_size=test_batch_size,
             shuffle=False,
             collate_fn=collate_fn_tcn,
-            num_workers=0
+            num_workers=args.num_workers
         )
 
     print(f"训练集大小: {len(train_dataset)}")
@@ -1136,7 +1137,7 @@ def main():
                 input_data, label_data, trial_lengths = batch_data
                 input_data = input_data.to(device)
                 label_data = label_data.to(device)
-
+                breakpoint()
                 estimates = model(input_data)
                 batch_losses = []
                 model_history = model.get_effective_history()
