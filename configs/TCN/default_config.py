@@ -141,10 +141,10 @@ teacher_forcing_ratio = 1.0
 # ==================== 训练配置 ====================
 
 # 训练轮数
-num_epochs = 200
+num_epochs = 2000
 
 # 批次大小
-batch_size = 64
+batch_size = 32
 
 # 测试批次大小（可以与训练批次大小不同）
 test_batch_size = 64
@@ -175,7 +175,7 @@ min_lr = 1e-6
 # ==================== 早停配置 ====================
 
 # 早停耐心值
-early_stopping_patience = 20
+early_stopping_patience = 50
 
 # 早停最小改善幅度
 early_stopping_min_delta = 0.0

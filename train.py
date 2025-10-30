@@ -198,15 +198,66 @@ def create_save_directory(config_path: str, model_type: str) -> str:
 
 
 def copy_config_file(config_path: str, save_dir: str):
-    """复制配置文件到保存目录"""
-    config_file_path = config_path.replace(".", os.sep) + ".py"
+    """
+    复制配置文件到保存目录
 
-    if os.path.exists(config_file_path):
+    支持的路径格式:
+    - configs.TCN.default_config.py -> configs/TCN/default_config.py
+    - configs.TCN.default_config -> configs/TCN/default_config.py
+    - configs/TCN/default_config.py -> configs/TCN/default_config.py
+    - configs/TCN/default_config -> configs/TCN/default_config.py
+    """
+    possible_paths = []
+
+    # 处理已经带.py后缀的情况
+    if config_path.endswith(".py"):
+        # 情况1: configs.TCN.default_config.py
+        # 移除.py后缀，将点替换为路径分隔符，再加上.py
+        path_without_py = config_path[:-3]  # 移除.py
+        possible_paths.append(path_without_py.replace(".", os.sep) + ".py")
+        possible_paths.append(path_without_py.replace(".", "/") + ".py")
+
+        # 情况2: configs/TCN/default_config.py (已经是正确路径)
+        possible_paths.append(config_path)
+
+        # 情况3: 如果包含点，尝试将.py前的最后一个点替换为/
+        if "." in path_without_py:
+            parts = path_without_py.split(".")
+            possible_paths.append(os.path.join(*parts) + ".py")
+    else:
+        # 没有.py后缀的情况
+        # configs.TCN.default_config 或 configs/TCN/default_config
+
+        # 情况1: 点分隔格式 -> 路径格式
+        possible_paths.append(config_path.replace(".", os.sep) + ".py")
+        possible_paths.append(config_path.replace(".", "/") + ".py")
+
+        # 情况2: 已经是路径格式
+        possible_paths.append(config_path + ".py")
+
+        # 情况3: 混合格式处理
+        if "." in config_path:
+            parts = config_path.split(".")
+            possible_paths.append(os.path.join(*parts) + ".py")
+
+    # 去重
+    possible_paths = list(dict.fromkeys(possible_paths))
+
+    # 尝试找到存在的文件
+    config_file_path = None
+    for path in possible_paths:
+        if os.path.exists(path):
+            config_file_path = path
+            break
+
+    if config_file_path:
         dest_path = os.path.join(save_dir, "config.py")
         shutil.copy(config_file_path, dest_path)
-        print(f"配置文件已复制到: {dest_path}")
+        print(f"✓ 配置文件已复制: {config_file_path} -> {dest_path}")
     else:
-        print(f"警告: 配置文件未找到 {config_file_path}")
+        print(f"⚠ 警告: 配置文件未找到，尝试过以下路径:")
+        for path in possible_paths:
+            print(f"    - {path}")
 
 
 def create_model(config, device: torch.device, resume_path: str = None) -> Tuple[nn.Module, int]:
@@ -1137,7 +1188,6 @@ def main():
                 input_data, label_data, trial_lengths = batch_data
                 input_data = input_data.to(device)
                 label_data = label_data.to(device)
-                breakpoint()
                 estimates = model(input_data)
                 batch_losses = []
                 model_history = model.get_effective_history()
@@ -1233,6 +1283,53 @@ def main():
     end_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     log_to_file(train_log_path, f"\n训练结束时间: {end_time}")
     log_to_file(train_log_path, f"最佳验证损失: {best_val_loss:.6f}")
+
+    # ========== 评估最佳模型 ==========
+    print("\n" + "=" * 60)
+    print("加载并评估最佳模型...")
+    print("=" * 60)
+
+    best_model_path = os.path.join(save_dir, "best_model.tar")
+    if os.path.exists(best_model_path):
+        # 加载最佳模型
+        checkpoint = torch.load(best_model_path, map_location=device)
+        model.load_state_dict(checkpoint["state_dict"])
+        model.eval()
+
+        # 在测试集上评估
+        best_metrics, best_loss = validate(
+            model, test_loader, label_names, device,
+            config.model_type, config, reconstruction_method
+        )
+
+        # 输出并记录最佳模型性能
+        best_log_content = f"\n{'=' * 60}\n"
+        best_log_content += "=== 最佳模型性能评估 ===\n"
+        best_log_content += f"{'=' * 60}\n"
+        best_log_content += f"模型路径: {best_model_path}\n"
+        best_log_content += f"验证损失: {best_loss:.6f}\n"
+
+        print(f"\n最佳模型验证损失: {best_loss:.6f}")
+
+        for label_name, metrics in best_metrics.items():
+            result_str = (f"\n{label_name}:\n"
+                          f"  RMSE: {metrics['rmse']:.4f} Nm/kg\n"
+                          f"  R²: {metrics['r2']:.4f}\n"
+                          f"  MAE: {metrics['mae_percent']:.2f}%")
+            print(result_str)
+            best_log_content += result_str + "\n"
+
+        best_log_content += f"{'=' * 60}\n"
+
+        # 记录到两个日志文件
+        log_to_file(train_log_path, best_log_content)
+        log_to_file(val_log_path, best_log_content)
+
+        print("=" * 60)
+    else:
+        print(f"⚠ 警告: 未找到最佳模型文件 {best_model_path}")
+
+    # ========== 评估结束 ==========
 
     print(f"\n所有结果已保存到: {save_dir}")
 

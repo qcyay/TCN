@@ -164,7 +164,7 @@ batch_size = 256
 test_batch_size = 2048
 
 # 学习率
-learning_rate = 0.001
+learning_rate = 0.0001
 
 # 权重衰减(L2正则化系数)
 weight_decay = 1e-5
