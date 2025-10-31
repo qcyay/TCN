@@ -25,7 +25,7 @@ parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_availa
                     help="训练设备 (cpu, cuda, 0, 1, 2, 3, ...)")
 parser.add_argument("--resume", type=str, default=None,
                     help="恢复训练的模型路径")
-parser.add_argument("--num_workers", type=int, default=32,
+parser.add_argument("--num_workers", type=int, default=16,
                     help="DataLoader的工作进程数（0表示单进程）")
 args = parser.parse_args()
 
