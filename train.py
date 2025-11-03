@@ -296,6 +296,7 @@ def create_model(config, device: torch.device, resume_path: str = None) -> Tuple
                 dim_feedforward=checkpoint.get("dim_feedforward", config.dim_feedforward),
                 dropout=checkpoint.get("dropout", config.transformer_dropout),
                 sequence_length=checkpoint.get("sequence_length", config.sequence_length),
+                output_sequence_length = checkpoint.get("output_sequence_length", config.output_sequence_length),
                 use_positional_encoding=checkpoint.get("use_positional_encoding", config.use_positional_encoding),
                 center=checkpoint.get("center", config.center),
                 scale=checkpoint.get("scale", config.scale)
@@ -794,6 +795,7 @@ def validate(model: nn.Module,
                 all_estimates.append(estimates)
                 all_labels.append(label_data)
 
+
                 # 计算损失
                 valid_mask = ~torch.isnan(estimates) & ~torch.isnan(label_data)
                 if valid_mask.sum() > 0:
@@ -868,6 +870,7 @@ def save_model(model: nn.Module, save_dir: str, epoch: int, config,
             "dim_feedforward": config.dim_feedforward,
             "dropout": config.transformer_dropout,
             "sequence_length": config.sequence_length,
+            "output_sequence_length":config.output_sequence_length,
             "use_positional_encoding": config.use_positional_encoding
         })
     else:  # TCN
@@ -1138,6 +1141,20 @@ def main():
         epoch_loss = 0.0
         num_batches = 0
 
+        # ========== 训练批次限制 ==========
+        train_batch_ratio = getattr(config, 'train_batch_ratio', 1.0)
+
+        # 只对Transformer类型的模型应用batch限制
+        if config.model_type in ['Transformer', 'GenerativeTransformer'] and train_batch_ratio < 1.0:
+            max_batches = max(1, int(len(train_loader) * train_batch_ratio))
+            if epoch == start_epoch:  # 只在第一个epoch打印一次
+                print(f"\n训练批次限制已启用:")
+                print(f"  总批次数: {len(train_loader)}")
+                print(f"  每轮使用批次数: {max_batches} ({train_batch_ratio * 100:.1f}%)")
+        else:
+            max_batches = len(train_loader)
+        # ========================================
+
         for batch_idx, batch_data in enumerate(train_loader):
             if config.model_type == 'GenerativeTransformer':
                 input_data, shifted_label_data, label_data = batch_data
@@ -1165,6 +1182,10 @@ def main():
                     epoch_loss += loss.item()
                     num_batches += 1
 
+                    # 检查是否达到最大batch数
+                    if num_batches >= max_batches:
+                        break
+
             elif config.model_type == 'Transformer':
                 input_data, label_data = batch_data
                 input_data = input_data.to(device)
@@ -1183,6 +1204,10 @@ def main():
 
                     epoch_loss += loss.item()
                     num_batches += 1
+
+                    # 检查是否达到最大batch数
+                    if num_batches >= max_batches:
+                        break
 
             else:  # TCN
                 input_data, label_data, trial_lengths = batch_data

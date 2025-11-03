@@ -156,7 +156,7 @@ learning_rate = 0.001
 weight_decay = 1e-5
 
 # 验证间隔(每隔多少轮在测试集上验证一次)
-val_interval = 20
+val_interval = 1
 
 # 模型保存间隔(每隔多少轮保存一次模型)
 save_interval = 50
@@ -167,7 +167,7 @@ save_interval = 50
 scheduler_factor = 0.9
 
 # ReduceLROnPlateau 耐心值
-scheduler_patience = 10
+scheduler_patience = 20
 
 # 最小学习率
 min_lr = 1e-6

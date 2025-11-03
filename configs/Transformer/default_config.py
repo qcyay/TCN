@@ -104,7 +104,7 @@ sequence_length = 100
 # 输出序列长度（预测或生成的序列长度）
 # 对于预测模型：决定预测的时间步数
 # 对于生成式模型：决定生成的时间步数
-output_sequence_length = 50
+output_sequence_length = 1
 
 # Transformer隐藏维度
 d_model = 128
@@ -116,7 +116,7 @@ nhead = 8
 num_encoder_layers = 3
 
 # 前馈网络维度
-dim_feedforward = 512
+dim_feedforward = 256
 
 # Transformer的dropout
 transformer_dropout = 0.1
@@ -158,10 +158,10 @@ reconstruction_method = 'only_first'
 num_epochs = 500
 
 # 训练批次大小
-batch_size = 256
+batch_size = 128
 
 # 测试批次大小（可以与训练批次大小不同）
-test_batch_size = 2048
+test_batch_size = 1024
 
 # 学习率
 learning_rate = 0.0001
@@ -170,14 +170,25 @@ learning_rate = 0.0001
 weight_decay = 1e-5
 
 # 验证间隔(每隔多少轮在测试集上验证一次)
-val_interval = 20
+val_interval = 1
 
 # 模型保存间隔(每隔多少轮保存一次模型)
 save_interval = 20
 
+# ==================== 训练批次比例配置 ====================
+# 每个epoch使用的批次比例（0.0-1.0）
+# 1.0表示使用全部批次，0.4表示每个epoch只训练前40%的批次
+# 这个参数对于大数据集的Transformer训练特别有用，可以显著加快训练速度
+# 推荐值：
+#   - 小数据集(总批次<1000): 1.0 (使用全部数据)
+#   - 中等数据集(总批次1000-5000): 0.5-0.8
+#   - 大数据集(总批次>5000): 0.3-0.5
+# 注意：DataLoader本身是shuffle的，所以每个epoch训练的batch都是随机的
+train_batch_ratio = 0.4
+
 # ==================== 学习率调度器配置 ====================
 
-# ReduceLROnPlateau 学习率衰减因子
+# ReduceLROnPlateau 学习率衰减因子zai1
 scheduler_factor = 0.9
 
 # ReduceLROnPlateau 耐心值
