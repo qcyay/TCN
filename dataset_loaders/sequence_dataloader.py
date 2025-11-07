@@ -1,4 +1,5 @@
 import os
+import re
 from typing import List, Dict, Optional, Tuple
 import pandas as pd
 import torch
@@ -28,7 +29,9 @@ class SequenceDataset(Dataset):
                  model_type: str = "Transformer",
                  start_token_value: float = 0.0,
                  file_suffix: Dict[str, str] = None,
-                 remove_nan: bool = True):
+                 remove_nan: bool = True,
+                 action_patterns: Optional[List[str]] = None,
+                 enable_action_filter: bool = False):
         """
         初始化序列数据集
 
@@ -47,6 +50,8 @@ class SequenceDataset(Dataset):
             start_token_value: 生成式模型的起始token值
             file_suffix: 文件后缀映射字典
             remove_nan: 是否自动检测并移除包含NaN的行
+            action_patterns: 运动类型筛选的正则表达式列表
+            enable_action_filter: 是否启用action_patterns筛选
         """
         self.data_dir = data_dir
         self.input_names = input_names
@@ -61,6 +66,8 @@ class SequenceDataset(Dataset):
         self.model_type = model_type
         self.start_token_value = start_token_value
         self.remove_nan = remove_nan
+        self.action_patterns = action_patterns
+        self.enable_action_filter = enable_action_filter
 
         # 设置文件后缀映射
         if file_suffix is None:
@@ -78,8 +85,9 @@ class SequenceDataset(Dataset):
         # 获取试验名称列表
         self.trial_names = self._get_trial_names()
 
+        filter_status = "启用" if self.enable_action_filter else "禁用"
         print(f"开始加载 {self.mode} 数据集 ({model_type})...")
-        print(f"找到 {len(self.trial_names)} 个试验")
+        print(f"找到 {len(self.trial_names)} 个试验 (动作筛选: {filter_status})")
 
         # 预加载所有数据到内存
         self.all_input_data = []  # 存储所有试验的输入数据
@@ -179,8 +187,38 @@ class SequenceDataset(Dataset):
 
         return shifted_seq
 
+    def _match_action_patterns(self, trial_name: str) -> bool:
+        """
+        检查试验名称是否匹配任何一个action_pattern
+
+        参数:
+            trial_name: 试验名称，格式为 "参与者/试验项目"
+
+        返回:
+            如果匹配返回True，否则返回False
+        """
+        if not self.enable_action_filter or not self.action_patterns:
+            return True
+
+        # 提取试验项目名称（不包含参与者名称）
+        trial_basename = os.path.basename(trial_name)
+
+        # 遍历所有pattern，如果任何一个匹配就返回True
+        for pattern_line in self.action_patterns:
+            # 每一行可能包含多个正则表达式，用逗号分隔
+            patterns = [p.strip() for p in pattern_line.split(',')]
+
+            for pattern in patterns:
+                if pattern and re.match(pattern, trial_basename):
+                    return True
+
+        return False
+
     def _get_trial_names(self) -> List[str]:
-        '''扫描数据目录，获取所有试验名称'''
+        '''
+        扫描数据目录，获取所有试验名称
+        支持基于action_patterns的筛选
+        '''
         mode_dir = os.path.join(self.data_dir, self.mode)
 
         if not os.path.exists(mode_dir):
@@ -198,16 +236,27 @@ class SequenceDataset(Dataset):
 
         # 遍历参与者目录，收集试验名称
         trial_names = []
+        filtered_out_count = 0
+
         for participant in participants:
             participant_dir = os.path.join(mode_dir, participant)
 
             for trial_item in os.listdir(participant_dir):
                 trial_path = os.path.join(participant_dir, trial_item)
                 if os.path.isdir(trial_path) and not trial_item.startswith('.'):
-                    trial_names.append(os.path.join(participant, trial_item))
+                    trial_name = os.path.join(participant, trial_item)
+
+                    # 检查是否匹配action_patterns
+                    if self._match_action_patterns(trial_name):
+                        trial_names.append(trial_name)
+                    else:
+                        filtered_out_count += 1
 
         if not trial_names:
-            raise ValueError(f"在参与者目录中未找到试验数据")
+            raise ValueError(f"在参与者目录中未找到试验数据（可能被action_patterns过滤）")
+
+        if self.enable_action_filter and filtered_out_count > 0:
+            print(f"过滤掉 {filtered_out_count} 个不匹配的试验")
 
         return trial_names
 

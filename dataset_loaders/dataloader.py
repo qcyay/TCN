@@ -1,4 +1,5 @@
 import os
+import re
 from typing import List, Dict, Optional, Tuple
 import pandas as pd
 import torch
@@ -18,7 +19,9 @@ class TcnDataset(Dataset):
                  mode: str = "train",
                  file_suffix: Dict[str, str] = None,
                  remove_nan: bool = True,
-                 load_to_device: bool = False):
+                 load_to_device: bool = False,
+                 action_patterns: Optional[List[str]] = None,
+                 enable_action_filter: bool = False):
         """
         初始化数据集，支持训练/测试模式和新文件结构
 
@@ -33,6 +36,8 @@ class TcnDataset(Dataset):
             file_suffix: 文件后缀映射字典，默认为 None 时使用预设值
             remove_nan: 是否自动检测并移除包含NaN的行（默认True）
             load_to_device: 是否在__getitem__中直接加载到device（False时返回CPU tensor，支持多进程）
+            action_patterns: 运动类型筛选的正则表达式列表
+            enable_action_filter: 是否启用action_patterns筛选
         """
         self.data_dir = data_dir
         self.input_names = input_names
@@ -43,6 +48,8 @@ class TcnDataset(Dataset):
         self.mode = mode.lower()
         self.remove_nan = remove_nan
         self.load_to_device = load_to_device
+        self.action_patterns = action_patterns
+        self.enable_action_filter = enable_action_filter
 
         # 设置文件后缀映射
         if file_suffix is None:
@@ -68,7 +75,9 @@ class TcnDataset(Dataset):
         }
 
         load_mode = "GPU" if self.load_to_device else "CPU"
-        print(f"数据集初始化完成 - 模式: {self.mode}, 试验数量: {len(self.trial_names)}, 加载模式: {load_mode}")
+        filter_status = "启用" if self.enable_action_filter else "禁用"
+        print(f"数据集初始化完成 - 模式: {self.mode}, 试验数量: {len(self.trial_names)}, "
+              f"加载模式: {load_mode}, 动作筛选: {filter_status}")
         if self.remove_nan:
             print(f"NaN自动移除: 启用 (将移除文件开头和结尾的NaN行)")
 
@@ -121,10 +130,38 @@ class TcnDataset(Dataset):
         '''返回NaN移除统计信息'''
         return self.nan_removal_stats
 
+    def _match_action_patterns(self, trial_name: str) -> bool:
+        """
+        检查试验名称是否匹配任何一个action_pattern
+
+        参数:
+            trial_name: 试验名称，格式为 "参与者/试验项目"
+
+        返回:
+            如果匹配返回True，否则返回False
+        """
+        if not self.enable_action_filter or not self.action_patterns:
+            return True
+
+        # 提取试验项目名称（不包含参与者名称）
+        trial_basename = os.path.basename(trial_name)
+
+        # 遍历所有pattern，如果任何一个匹配就返回True
+        for pattern_line in self.action_patterns:
+            # 每一行可能包含多个正则表达式，用逗号分隔
+            patterns = [p.strip() for p in pattern_line.split(',')]
+
+            for pattern in patterns:
+                if pattern and re.match(pattern, trial_basename):
+                    return True
+
+        return False
+
     def _get_trial_names(self):
         '''
         扫描数据目录，获取所有试验名称。
         新目录结构: data_dir/(train/test)/人名/运动状态/
+        支持基于action_patterns的筛选
         '''
         # 构建模式子目录路径
         mode_dir = os.path.join(self.data_dir, self.mode)
@@ -146,6 +183,8 @@ class TcnDataset(Dataset):
 
         # 遍历参与者目录，收集试验名称
         trial_names = []
+        filtered_out_count = 0
+
         for participant in participants:
             participant_dir = os.path.join(mode_dir, participant)
 
@@ -154,12 +193,23 @@ class TcnDataset(Dataset):
                 trial_path = os.path.join(participant_dir, trial_item)
                 if os.path.isdir(trial_path) and not trial_item.startswith('.'):
                     # 试验名称格式: 参与者/试验项目
-                    trial_names.append(os.path.join(participant, trial_item))
+                    trial_name = os.path.join(participant, trial_item)
+
+                    # 检查是否匹配action_patterns
+                    if self._match_action_patterns(trial_name):
+                        trial_names.append(trial_name)
+                    else:
+                        filtered_out_count += 1
 
         if not trial_names:
-            raise ValueError(f"在参与者目录中未找到试验数据")
+            raise ValueError(f"在参与者目录中未找到试验数据（可能被action_patterns过滤）")
 
-        print(f"找到 {len(trial_names)} 个试验")
+        print(f"找到 {len(trial_names)} 个试验", end="")
+        if self.enable_action_filter and filtered_out_count > 0:
+            print(f" (过滤掉 {filtered_out_count} 个不匹配的试验)")
+        else:
+            print()
+
         return trial_names
 
     def _find_valid_range(self, df: pd.DataFrame, columns: List[str]) -> Tuple[int, int]:

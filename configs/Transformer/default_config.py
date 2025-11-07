@@ -31,6 +31,48 @@ input_names = [
     "knee_angle_*", "knee_angle_*_velocity_filt"
 ]
 
+# ==================== 运动类型筛选配置 ====================
+
+# 是否启用基于action_patterns的数据筛选
+# True: 只使用action_patterns中指定的运动类型
+# False: 使用所有可用的数据文件（忽略action_patterns）
+enable_action_filter = True
+
+# 运动类型筛选模式（使用正则表达式）
+# 注释掉某一行可以排除该运动类型
+# 每行可以包含多个正则表达式，用逗号分隔
+action_patterns = [
+	# === 按论文中重要性排序的动作筛选 ===
+	# r"^normal_walk_.*_(shuffle|0-6|1-2|1-8).*",  # 1. Level ground walk
+	# r"^poses_.*",  # 2. Standing poses
+	# r"^dynamic_walk_.*(high-knees|butt-kicks).*", r"^normal_walk_.*skip.*", r"^tire_run_.*",  # 3. Calisthenics
+	# r"^push_.*",  # 4. Push and pull recovery
+	# r"^jump_.*_(hop|vertical|180|90-f|90-s).*",  # 5. Jump in place
+	# r"^turn_and_step_.*",  # 6. Turns
+	# r"^cutting_.*",  # 7. Cut
+	# r"^sit_to_stand_.*",  # 8. Sit and stand
+	# r"^walk_backward_.*",  # 9. Backwards walk
+	# r"^weighted_walk_.*",  # 10. 25 lb Loaded walk
+	# r"^lift_weight_.*",  # 11. Lift and place weight
+	# r"^tug_of_war_.*",  # 12. Tug of war
+	# r"^jump_.*_(fb|lateral).*", r"^side_shuffle_.*",  # 13. Jump across
+	# r"^normal_walk_.*_(2-0|2-5).*",  # 14. Run
+	# r"^dynamic_walk_.*(toe-walk|heel-walk).*",  # 15. Toe and heel walk
+	# r"^twister_.*",  # 16. Twister
+	# r"^meander_.*",  # 17. Meander
+	# r"^incline_walk_.*up.*",  # 18. Inclined walk
+	r"^stairs_.*down.*",  # 19. Stair descent
+	# r"^lunges_.*",  # 20. Lunge
+	# r"^stairs_.*up.*",  # 21. Stair ascent
+	# r"^incline_walk_.*down.*",  # 22. Declined walk
+	# r"^start_stop_.*",  # 23. Start and stop
+	# r"^ball_toss_.*",  # 24. Medicine ball toss
+	# r"^obstacle_walk_.*",  # 25. Step over
+	# r"^squats_.*",  # 26. Squat
+	# r"^curb_.*",  # 27. Curb
+	# r"^step_ups_.*",  # 28. Step up
+]
+
 # 模型输出(预测)的标签名称
 label_names = ["hip_flexion_*_moment", "knee_angle_*_moment"]
 
@@ -99,7 +141,7 @@ eff_hist = 248
 # ==================== Transformer预测模型配置 ====================
 
 # 输入序列长度（滑动窗口大小）
-sequence_length = 100
+sequence_length = 200
 
 # 输出序列长度（预测或生成的序列长度）
 # 对于预测模型：决定预测的时间步数
@@ -188,7 +230,7 @@ train_batch_ratio = 0.4
 
 # ==================== 学习率调度器配置 ====================
 
-# ReduceLROnPlateau 学习率衰减因子zai1
+# ReduceLROnPlateau 学习率衰减因子
 scheduler_factor = 0.9
 
 # ReduceLROnPlateau 耐心值
