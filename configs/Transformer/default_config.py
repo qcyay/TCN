@@ -43,7 +43,7 @@ enable_action_filter = True
 # 每行可以包含多个正则表达式，用逗号分隔
 action_patterns = [
 	# === 按论文中重要性排序的动作筛选 ===
-	# r"^normal_walk_.*_(shuffle|0-6|1-2|1-8).*",  # 1. Level ground walk
+	r"^normal_walk_.*_(shuffle|0-6|1-2|1-8).*",  # 1. Level ground walk
 	# r"^poses_.*",  # 2. Standing poses
 	# r"^dynamic_walk_.*(high-knees|butt-kicks).*", r"^normal_walk_.*skip.*", r"^tire_run_.*",  # 3. Calisthenics
 	# r"^push_.*",  # 4. Push and pull recovery
@@ -61,7 +61,7 @@ action_patterns = [
 	# r"^twister_.*",  # 16. Twister
 	# r"^meander_.*",  # 17. Meander
 	# r"^incline_walk_.*up.*",  # 18. Inclined walk
-	r"^stairs_.*down.*",  # 19. Stair descent
+	# r"^stairs_.*down.*",  # 19. Stair descent
 	# r"^lunges_.*",  # 20. Lunge
 	# r"^stairs_.*up.*",  # 21. Stair ascent
 	# r"^incline_walk_.*down.*",  # 22. Declined walk
