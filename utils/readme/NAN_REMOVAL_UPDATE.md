@@ -175,7 +175,7 @@ python utils/check_data_nan.py --detailed --export nan_analysis.txt
 # 2. 测试NaN移除功能
 python test_nan_removal.py
 
-# 3. 计算归一化参数（现在会自动跳过NaN）
+# 2. 计算归一化参数（现在会自动跳过NaN）
 python compute_normalization_params.py
 
 # 4. 更新配置文件中的center和scale
@@ -198,7 +198,7 @@ nan_mask = df[input_names].isna().any(axis=1)
 # 2. 找到第一个包含NaN的行
 nan_indices = nan_mask[nan_mask].index.tolist()
 
-# 3. 在该行之前截断
+# 2. 在该行之前截断
 if nan_indices:
     cutoff_index = nan_indices[0]
     df = df.iloc[:cutoff_index]

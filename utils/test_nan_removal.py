@@ -250,14 +250,14 @@ def main():
         print("\n下一步:")
         print("  1. 运行: python compute_normalization_params.py")
         print("  2. 更新配置文件中的center和scale")
-        print("  3. 运行: python diagnose_nan.py")
+        print("  2. 运行: python diagnose_nan.py")
         print("  1. 开始训练: python train.py")
     else:
         print("⚠️  部分测试未通过，请检查数据或配置")
         print("\n建议:")
         print("  1. 运行: python utils/check_data_nan.py --detailed")
         print("  2. 检查数据文件是否正确")
-        print("  3. 确认配置文件中的input_names是否正确")
+        print("  2. 确认配置文件中的input_names是否正确")
 
 
 if __name__ == "__main__":

@@ -21,7 +21,7 @@
 ```bash
 cd your_project
 cp dataset_loaders/sequence_dataloader.py dataset_loaders/sequence_dataloader.py.bak
-cp configs/default_config.py configs/default_config.py.bak
+cp configs/partial_motion_knee_config.py configs/partial_motion_knee_config.py.bak
 cp train.py train.py.bak
 cp test.py test.py.bak
 ```
@@ -30,7 +30,7 @@ cp test.py test.py.bak
 ```bash
 # 复制下载的文件到对应位置
 cp sequence_dataloader.py dataset_loaders/
-cp default_config.py configs/
+cp partial_motion_knee_config.py configs/
 cp train_modified.py train.py
 cp test_modified.py test.py
 ```

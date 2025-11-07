@@ -40,7 +40,7 @@
 
 **方法1：在配置文件中设置（推荐）**
 ```python
-# configs/default_config.py
+# configs/partial_motion_knee_config.py
 reconstruction_method = 'only_first'  # 或 'average'
 ```
 然后直接运行：

@@ -1,10 +1,10 @@
 """
-人体运动数据可视化工具 (v3.3 最终简化版)
+人体运动数据可视化工具 (v3.2 最终简化版)
 支持交互式Web界面和命令行两种模式
 更新：
 1. 简化文件选择为类型选择（exo 或 moment）
 2. 自动匹配符合规则的文件
-3. 支持在同一图中对比多人同一运动的同一参数
+2. 支持在同一图中对比多人同一运动的同一参数
 1. 新增时间对齐功能
 5. 支持多选文件类型
 6. 每个参数独立显示在一个子图中
@@ -303,7 +303,7 @@ def interactive_mode(data_root: str):
         return
 
     st.title("🏃 人体运动数据可视化工具")
-    st.markdown("*v3.3: 简化版 - 每个参数独立显示*")
+    st.markdown("*v3.2: 简化版 - 每个参数独立显示*")
 
     try:
         visualizer = MotionDataVisualizer(data_root)
@@ -353,7 +353,7 @@ def interactive_mode(data_root: str):
 
     st.sidebar.success(f"已选择 {len(selected_motions)} 个运动类型")
 
-    # 3. 选择文件类型
+    # 2. 选择文件类型
     file_availability = visualizer.check_file_type_availability(selected_subjects, selected_motions)
     available_types = [ft for ft, available in file_availability.items() if available]
 
@@ -501,7 +501,7 @@ def command_line_mode(config: Dict):
 
 def main():
     parser = argparse.ArgumentParser(
-        description='人体运动数据可视化工具 (v3.3)',
+        description='人体运动数据可视化工具 (v3.2)',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 使用示例:
@@ -514,10 +514,10 @@ def main():
             --file_types exo moment --columns col1 col2 \\
             --align_time
   
-  3. 配置文件模式:
+  2. 配置文件模式:
      python motion_data_visualizer.py --config config.yaml
 
-v3.3 更新:
+v3.2 更新:
   - 简化操作，去掉叠加显示功能
   - 每个参数独立显示在一个子图中
   - 支持多选文件类型

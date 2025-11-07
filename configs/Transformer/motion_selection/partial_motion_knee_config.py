@@ -42,126 +42,35 @@ enable_action_filter = True
 # 注释掉某一行可以排除该运动类型
 # 每行可以包含多个正则表达式，用逗号分隔
 action_patterns = [
-    # === 按论文中重要性排序的动作筛选 ===
-    r"^normal_walk_.*_(shuffle|0-6|1-2|1-8).*",  # 1. Level ground walk
-    r"^poses_.*",  # 2. Standing poses
-    r"^dynamic_walk_.*(high-knees|butt-kicks).*", r"^normal_walk_.*skip.*", r"^tire_run_.*",  # 2. Calisthenics
-    r"^push_.*",  # 4. Push and pull recovery
-    r"^jump_.*_(hop|vertical|180|90-f|90-s).*",  # 5. Jump in place
-    r"^turn_and_step_.*",  # 6. Turns
-    r"^cutting_.*",  # 7. Cut
-    r"^sit_to_stand_.*",  # 8. Sit and stand
-    r"^walk_backward_.*",  # 9. Backwards walk
-    r"^weighted_walk_.*",  # 10. 25 lb Loaded walk
-    r"^lift_weight_.*",  # 11. Lift and place weight
-    r"^tug_of_war_.*",  # 12. Tug of war
-    r"^jump_.*_(fb|lateral).*", r"^side_shuffle_.*",  # 13. Jump across
-    r"^normal_walk_.*_(2-0|2-5).*",  # 14. Run
-    r"^dynamic_walk_.*(toe-walk|heel-walk).*",  # 15. Toe and heel walk
-    r"^twister_.*",  # 16. Twister
-    r"^meander_.*",  # 17. Meander
-    r"^incline_walk_.*up.*",  # 18. Inclined walk
-    r"^stairs_.*down.*",  # 19. Stair descent
-    r"^lunges_.*",  # 20. Lunge
-    r"^stairs_.*up.*",  # 21. Stair ascent
-    r"^incline_walk_.*down.*",  # 22. Declined walk
-    r"^start_stop_.*",  # 23. Start and stop
-    r"^ball_toss_.*",  # 24. Medicine ball toss
-    r"^obstacle_walk_.*",  # 25. Step over
-    r"^squats_.*",  # 26. Squat
-    r"^curb_.*",  # 27. Curb
-    r"^step_ups_.*",  # 28. Step up
-]
-
-# ==================== 运动类型分类配置 ====================
-
-# 运动类型到大类的映射（用于test.py分类评估）
-# 键为运动类型的正则表达式，值为大类名称
-action_to_category = {
-    # 周期性运动 (Cyclic)
-    r"^normal_walk_.*_(shuffle|0-6|1-2|1-8).*": "Cyclic",  # Level ground walk
-    r"^walk_backward_.*": "Cyclic",  # Backwards walk
-    r"^weighted_walk_.*": "Cyclic",  # 25 lb Loaded walk
-    r"^normal_walk_.*_(2-0|2-5).*": "Cyclic",  # Run
-    r"^dynamic_walk_.*(toe-walk|heel-walk).*": "Cyclic",  # Toe and heel walk
-    r"^incline_walk_.*up.*": "Cyclic",  # Inclined walk
-    r"^stairs_.*down.*": "Cyclic",  # Stair descent
-    r"^stairs_.*up.*": "Cyclic",  # Stair ascent
-    r"^incline_walk_.*down.*": "Cyclic",  # Declined walk
-
-    # 阻抗性运动 (Impedance-like)
-    r"^poses_.*": "Impedance-like",  # Standing poses
-    r"^jump_.*_(hop|vertical|180|90-f|90-s).*": "Impedance-like",  # Jump in place
-    r"^sit_to_stand_.*": "Impedance-like",  # Sit and stand
-    r"^lift_weight_.*": "Impedance-like",  # Lift and place weight
-    r"^tug_of_war_.*": "Impedance-like",  # Tug of war
-    r"^jump_.*_(fb|lateral).*": "Impedance-like",  # Jump across (part)
-    r"^side_shuffle_.*": "Impedance-like",  # Jump across (part)
-    r"^lunges_.*": "Impedance-like",  # Lunge
-    r"^ball_toss_.*": "Impedance-like",  # Medicine ball toss
-    r"^squats_.*": "Impedance-like",  # Squat
-    r"^step_ups_.*": "Impedance-like",  # Step up
-
-    # 非结构化运动 (Unstructured)
-    r"^dynamic_walk_.*(high-knees|butt-kicks).*": "Unstructured",  # Calisthenics (part)
-    r"^normal_walk_.*skip.*": "Unstructured",  # Calisthenics (part)
-    r"^tire_run_.*": "Unstructured",  # Calisthenics (part)
-    r"^push_.*": "Unstructured",  # Push and pull recovery
-    r"^turn_and_step_.*": "Unstructured",  # Turns
-    r"^cutting_.*": "Unstructured",  # Cut
-    r"^twister_.*": "Unstructured",  # Twister
-    r"^meander_.*": "Unstructured",  # Meander
-    r"^start_stop_.*": "Unstructured",  # Start and stop
-    r"^obstacle_walk_.*": "Unstructured",  # Step over
-    r"^curb_.*": "Unstructured",  # Curb
-}
-
-# 训练集中未见过的任务（用于单独评估）
-unseen_action_patterns = [
-    r"^lunges_.*",  # Lunge
-    r"^stairs_.*up.*",  # Stair ascent
-    r"^incline_walk_.*down.*",  # Declined walk
-    r"^start_stop_.*",  # Start and stop
-    r"^ball_toss_.*",  # Medicine ball toss
-    r"^obstacle_walk_.*",  # Step over
-    r"^squats_.*",  # Squat
-    r"^curb_.*",  # Curb
-    r"^step_ups_.*",  # Step up
-]
-
-# ==================== 可视化配置 ====================
-
-# 是否生成箱线图
-generate_boxplots = True
-
-# 是否为三大类别生成箱线图（Cyclic, Impedance-like, Unstructured）
-plot_categories = True
-
-# 是否为未见任务生成箱线图
-plot_unseen = True
-
-# 额外需要绘制分面箱线图的运动类型（可以是单独的运动类型）
-# 格式: 列表中每个元素是一个字典，包含'name'和'patterns'
-# 'name': 显示在图中的名称
-# 'patterns': 正则表达式列表，用于匹配该类型
-additional_plot_groups = [
-    # 示例: 只看行走类任务
-    # {
-    #     'name': 'Walking Tasks',
-    #     'patterns': [
-    #         r"^normal_walk_.*_(shuffle|0-6|1-2|1-8).*",
-    #         r"^walk_backward_.*",
-    #         r"^weighted_walk_.*",
-    #         r"^incline_walk_.*",
-    #     ]
-    # },
-    # 示例: 只看跳跃类任务
-    # {
-    #     'name': 'Jumping Tasks',
-    #     'patterns': [
-    #         r"^jump_.*",
-    #     ]
-    # },
+	# === 按论文中重要性排序的动作筛选 ===
+	r"^normal_walk_.*_(shuffle|0-6|1-2|1-8).*",  # 1. Level ground walk
+	r"^poses_.*",  # 2. Standing poses
+	# r"^dynamic_walk_.*(high-knees|butt-kicks).*", r"^normal_walk_.*skip.*", r"^tire_run_.*",  # 2. Calisthenics
+	# r"^push_.*",  # 4. Push and pull recovery
+	r"^jump_.*_(hop|vertical|180|90-f|90-s).*",  # 5. Jump in place
+	r"^turn_and_step_.*",  # 6. Turns
+	r"^cutting_.*",  # 7. Cut
+	r"^sit_to_stand_.*",  # 8. Sit and stand
+	r"^walk_backward_.*",  # 9. Backwards walk
+	r"^weighted_walk_.*",  # 10. 25 lb Loaded walk
+	# r"^lift_weight_.*",  # 11. Lift and place weight
+	# r"^tug_of_war_.*",  # 12. Tug of war
+	r"^jump_.*_(fb|lateral).*", r"^side_shuffle_.*",  # 13. Jump across
+	# r"^normal_walk_.*_(2-0|2-5).*",  # 14. Run
+	# r"^dynamic_walk_.*(toe-walk|heel-walk).*",  # 15. Toe and heel walk
+	# r"^twister_.*",  # 16. Twister
+	# r"^meander_.*",  # 17. Meander
+	r"^incline_walk_.*up.*",  # 18. Inclined walk
+	r"^stairs_.*down.*",  # 19. Stair descent
+	# r"^lunges_.*",  # 20. Lunge
+	r"^stairs_.*up.*",  # 21. Stair ascent
+	r"^incline_walk_.*down.*",  # 22. Declined walk
+	r"^start_stop_.*",  # 23. Start and stop
+	# r"^ball_toss_.*",  # 24. Medicine ball toss
+	# r"^obstacle_walk_.*",  # 25. Step over
+	r"^squats_.*",  # 26. Squat
+	# r"^curb_.*",  # 27. Curb
+	# r"^step_ups_.*",  # 28. Step up
 ]
 
 # 模型输出(预测)的标签名称
@@ -263,13 +172,13 @@ use_positional_encoding = True
 encoder_type = 'transformer'  # 'transformer' 使用Transformer Encoder, 'linear' 使用线性层
 
 # 生成式模型专用参数
-gen_d_model = 128  # 生成模型的隐藏维度
-gen_nhead = 8  # 注意力头数
-gen_num_encoder_layers = 3  # 编码器层数（如果使用transformer encoder）
-gen_num_decoder_layers = 3  # 解码器层数
-gen_dim_feedforward = 512  # 前馈网络维度
-gen_dropout = 0.1  # Dropout比率
-gen_sequence_length = 100  # 编码器输入序列长度
+gen_d_model = 128              # 生成模型的隐藏维度
+gen_nhead = 8                  # 注意力头数
+gen_num_encoder_layers = 3     # 编码器层数（如果使用transformer encoder）
+gen_num_decoder_layers = 3     # 解码器层数
+gen_dim_feedforward = 512      # 前馈网络维度
+gen_dropout = 0.1              # Dropout比率
+gen_sequence_length = 100      # 编码器输入序列长度
 
 # 自回归生成时的起始token值（可以是0或其他合理值）
 start_token_value = 0.0
@@ -317,7 +226,7 @@ save_interval = 20
 #   - 中等数据集(总批次1000-5000): 0.5-0.8
 #   - 大数据集(总批次>5000): 0.2-0.5
 # 注意：DataLoader本身是shuffle的，所以每个epoch训练的batch都是随机的
-train_batch_ratio = 0.4
+train_batch_ratio = 1
 
 # ==================== 学习率调度器配置 ====================
 

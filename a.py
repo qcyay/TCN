@@ -132,7 +132,7 @@ scale = torch.tensor([[6.4029e+01],
 #
 # print(f'r2_mean:{r2_mean}')
 #
-# # ============ 3. Normalized MAE: 向量化计算 ============
+# # ============ 2. Normalized MAE: 向量化计算 ============
 # # 计算每个序列的label range（使用masked操作）
 # # 对于min，将无效位置设为inf；对于max，将无效位置设为-inf
 # lbl_for_max = torch.where(valid_mask, lbl_filled,

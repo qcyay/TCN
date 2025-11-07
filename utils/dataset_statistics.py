@@ -6,14 +6,14 @@
 功能:
 1. 统计所有运动数据文件的总数量
 2. 统计每个运动类型(基于action_patterns)的文件数量
-3. 列出每个运动类型下的所有文件名
+2. 列出每个运动类型下的所有文件名
 
 使用方法:
-    python dataset_statistics.py --config configs/default_config.py --data_dir data/train
-    python dataset_statistics.py --config configs/default_config.py --data_dir data/test
-    python dataset_statistics.py --config configs/Transformer/default_config.py --data_dir data/train
-    python dataset_statistics.py --config ../configs/Transformer/default_config.py --data_dir ./data/train
-    python dataset_statistics.py --config configs/default_config.py --data_dir data/train --save_output stats_train.txt
+    python dataset_statistics.py --config configs/partial_motion_knee_config.py --data_dir data/train
+    python dataset_statistics.py --config configs/partial_motion_knee_config.py --data_dir data/test
+    python dataset_statistics.py --config configs/Transformer/partial_motion_knee_config.py --data_dir data/train
+    python dataset_statistics.py --config ../configs/Transformer/partial_motion_knee_config.py --data_dir ./data/train
+    python dataset_statistics.py --config configs/partial_motion_knee_config.py --data_dir data/train --save_output stats_train.txt
 """
 
 import os
@@ -415,16 +415,16 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  python dataset_statistics.py --config configs/default_config.py --data_dir data/train
-  python dataset_statistics.py --config configs/default_config.py --data_dir data/test
-  python dataset_statistics.py --config ../configs/Transformer/default_config.py --data_dir ./data/train
-  python dataset_statistics.py --config configs/default_config.py --data_dir data/train --save_output stats.txt
-  python dataset_statistics.py --config configs/default_config.py --data_dir data/train --no_filenames
+  python dataset_statistics.py --config configs/partial_motion_knee_config.py --data_dir data/train
+  python dataset_statistics.py --config configs/partial_motion_knee_config.py --data_dir data/test
+  python dataset_statistics.py --config ../configs/Transformer/partial_motion_knee_config.py --data_dir ./data/train
+  python dataset_statistics.py --config configs/partial_motion_knee_config.py --data_dir data/train --save_output stats.txt
+  python dataset_statistics.py --config configs/partial_motion_knee_config.py --data_dir data/train --no_filenames
         """
     )
 
     parser.add_argument('--config', type=str, required=True,
-                        help='配置文件路径 (例如: configs/default_config.py 或 ../configs/default_config.py)')
+                        help='配置文件路径 (例如: configs/partial_motion_knee_config.py 或 ../configs/partial_motion_knee_config.py)')
     parser.add_argument('--data_dir', type=str, default='data/train',
                         help='数据目录路径 (默认: data/train)')
     parser.add_argument('--mode', type=str, choices=['train', 'test'], default=None,

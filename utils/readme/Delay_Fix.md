@@ -158,7 +158,7 @@ lbl: lbl_trial[2, 0:990]        # [0:990], 990个点
 ### 配置文件中设置delay
 
 ```python
-# configs/default_config.py
+# configs/partial_motion_knee_config.py
 model_delays = [0, 5, 10, 15]  # 为每个输出通道指定delay
 ```
 

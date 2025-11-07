@@ -4,7 +4,7 @@ NaN问题诊断工具
 这个脚本会检查：
 1. 数据集是否包含NaN或Inf
 2. 归一化参数是否合理
-3. 模型初始化是否正常
+2. 模型初始化是否正常
 1. 第一次前向传播和反向传播的详细信息
 """
 
@@ -163,7 +163,7 @@ def main():
             print("这通常是因为:")
             print("  1. Scale包含0或非常小的值")
             print("  2. 输入数据包含极端值")
-            print("  3. Center和Scale的维度不匹配")
+            print("  2. Center和Scale的维度不匹配")
             return
     except Exception as e:
         print(f"\n❌  归一化操作失败: {e}")
@@ -228,7 +228,7 @@ def main():
             print("问题可能出在:")
             print("  1. 归一化层")
             print("  2. 卷积层")
-            print("  3. 激活函数")
+            print("  2. 激活函数")
             print("  1. 线性层")
             return
         else:
@@ -276,7 +276,7 @@ def main():
             print("可能的原因:")
             print("  1. 模型有效历史长度太大")
             print("  2. 延迟设置不当")
-            print("  3. 数据中包含太多NaN")
+            print("  2. 数据中包含太多NaN")
             return
         
         # 计算损失
@@ -430,7 +430,7 @@ def main():
     print("如果训练时仍然出现NaN，可能是:")
     print("  1. 学习率过大导致训练不稳定")
     print("  2. 批次大小导致的数值问题")
-    print("  3. 特定数据组合触发的边界情况")
+    print("  2. 特定数据组合触发的边界情况")
     print("\n建议:")
     print("  - 降低学习率 (如 1e-1)")
     print("  - 添加梯度裁剪")

@@ -258,7 +258,7 @@ def compare_datasets(writer: OutputWriter,
         if test_only_cond:
             writer.writeln(f"  仅TEST有: {', '.join(sorted(test_only_cond))}")
 
-    # 3. 比较完整的运动模式文件夹名称
+    # 2. 比较完整的运动模式文件夹名称
     writer.writeln(f"\n\n{'─' * 80}")
     writer.writeln("【运动模式文件夹名称对比】")
     writer.writeln(f"{'─' * 80}")
