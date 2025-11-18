@@ -75,7 +75,7 @@ scale = torch.tensor([
 # ==================== TCN专用配置 ====================
 
 # TCN每层的通道数
-num_channels = [64, 64]
+num_channels = [64, 128, 256]
 
 # 卷积核大小
 ksize = 3
@@ -144,7 +144,7 @@ teacher_forcing_ratio = 1.0
 num_epochs = 2000
 
 # 批次大小
-batch_size = 32
+batch_size = 8
 
 # 测试批次大小（可以与训练批次大小不同）
 test_batch_size = 64

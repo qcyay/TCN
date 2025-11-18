@@ -10,7 +10,7 @@ model_type = 'Transformer'
 # ==================== 数据配置 ====================
 
 # 相对路径:训练好的模型保存位置
-model_path = os.path.join("logs", "trained_model.tar")
+model_path = os.path.join("logs", "trained_transformer_thigh_imu_and_knee_angle_knee_config", "0", "best_model.tar")
 
 # 相对路径:数据目录
 data_dir = 'data'
@@ -31,12 +31,46 @@ input_names = [
     "knee_angle_*", "knee_angle_*_velocity_filt"
 ]
 
+# ==================== 特征选择配置 ====================
+# 是否启用特征选择（False时使用所有特征）
+enable_feature_selection = True
+
+# 选择的特征索引列表（从0开始，对应input_names中的位置）
+# 例如: [0, 1, 2, 6, 7, 8] 表示选择第1, 2, 3, 7, 8, 9个特征
+# 设置为 None 或空列表 [] 表示使用所有特征
+# 特征索引对照表:
+#   0-2:   foot_imu  gyro (x, y, z)
+#   3-5:   foot_imu  accel (x, y, z)
+#   6-8:   shank_imu gyro (x, y, z)
+#   9-11:  shank_imu accel (x, y, z)
+#   12-14: thigh_imu gyro (x, y, z)
+#   15-17: thigh_imu accel (x, y, z)
+#   18-20: insole (cop_x, cop_z, force_y)
+#   21:    hip_angle
+#   22:    hip_angle_velocity_filt
+#   23:    knee_angle
+#   24:    knee_angle_velocity_filt
+selected_feature_indices = [12,13,14,15,16,17,23,24]
+
+# 常用特征组合预设（可以直接使用或参考）
+# 示例1: 仅使用IMU传感器 (索引 0-17)
+# selected_feature_indices = list(range(18))
+
+# 示例2: 仅使用关节角度和角速度 (索引 21-24)
+# selected_feature_indices = [21, 22, 23, 24]
+
+# 示例3: IMU + 关节角度（不含压力鞋垫）
+# selected_feature_indices = list(range(18)) + [21, 22, 23, 24]
+
+# 示例4: 仅使用大腿和小腿IMU
+# selected_feature_indices = list(range(6, 18))
+
 # ==================== 运动类型筛选配置 ====================
 
 # 是否启用基于action_patterns的数据筛选
 # True: 只使用action_patterns中指定的运动类型
 # False: 使用所有可用的数据文件（忽略action_patterns）
-enable_action_filter = True
+enable_action_filter = False
 
 # 运动类型筛选模式（使用正则表达式）
 # 注释掉某一行可以排除该运动类型
@@ -45,36 +79,36 @@ action_patterns = [
 	# === 按论文中重要性排序的动作筛选 ===
 	r"^normal_walk_.*_(shuffle|0-6|1-2|1-8).*",  # 1. Level ground walk
 	r"^poses_.*",  # 2. Standing poses
-	# r"^dynamic_walk_.*(high-knees|butt-kicks).*", r"^normal_walk_.*skip.*", r"^tire_run_.*",  # 3. Calisthenics
-	# r"^push_.*",  # 4. Push and pull recovery
+	r"^dynamic_walk_.*(high-knees|butt-kicks).*", r"^normal_walk_.*skip.*", r"^tire_run_.*",  # 3. Calisthenics
+	r"^push_.*",  # 4. Push and pull recovery
 	r"^jump_.*_(hop|vertical|180|90-f|90-s).*",  # 5. Jump in place
 	r"^turn_and_step_.*",  # 6. Turns
 	r"^cutting_.*",  # 7. Cut
 	r"^sit_to_stand_.*",  # 8. Sit and stand
 	r"^walk_backward_.*",  # 9. Backwards walk
 	r"^weighted_walk_.*",  # 10. 25 lb Loaded walk
-	# r"^lift_weight_.*",  # 11. Lift and place weight
-	# r"^tug_of_war_.*",  # 12. Tug of war
+	r"^lift_weight_.*",  # 11. Lift and place weight
+	r"^tug_of_war_.*",  # 12. Tug of war
 	r"^jump_.*_(fb|lateral).*", r"^side_shuffle_.*",  # 13. Jump across
-	# r"^normal_walk_.*_(2-0|2-5).*",  # 14. Run
-	# r"^dynamic_walk_.*(toe-walk|heel-walk).*",  # 15. Toe and heel walk
-	# r"^twister_.*",  # 16. Twister
-	# r"^meander_.*",  # 17. Meander
+	r"^normal_walk_.*_(2-0|2-5).*",  # 14. Run
+	r"^dynamic_walk_.*(toe-walk|heel-walk).*",  # 15. Toe and heel walk
+	r"^twister_.*",  # 16. Twister
+	r"^meander_.*",  # 17. Meander
 	r"^incline_walk_.*up.*",  # 18. Inclined walk
 	r"^stairs_.*down.*",  # 19. Stair descent
-	# r"^lunges_.*",  # 20. Lunge
+	r"^lunges_.*",  # 20. Lunge
 	r"^stairs_.*up.*",  # 21. Stair ascent
 	r"^incline_walk_.*down.*",  # 22. Declined walk
 	r"^start_stop_.*",  # 23. Start and stop
-	# r"^ball_toss_.*",  # 24. Medicine ball toss
-	# r"^obstacle_walk_.*",  # 25. Step over
+	r"^ball_toss_.*",  # 24. Medicine ball toss
+	r"^obstacle_walk_.*",  # 25. Step over
 	r"^squats_.*",  # 26. Squat
-	# r"^curb_.*",  # 27. Curb
-	# r"^step_ups_.*",  # 28. Step up
+	r"^curb_.*",  # 27. Curb
+	r"^step_ups_.*",  # 28. Step up
 ]
 
 # 模型输出(预测)的标签名称
-label_names = ["hip_flexion_*_moment", "knee_angle_*_moment"]
+label_names = ["knee_angle_*_moment"]
 
 # 模型预测的延迟(单位:数据点)
 # 数据采样率为200Hz,每个点代表5ms
@@ -92,13 +126,14 @@ participant_masses = {
 
 # ==================== 通用模型配置 ====================
 
-# 输入特征数量(自动计算)
+# 输入特征数量(如果启用特征选择，会自动更新)
 input_size = len(input_names)
 
 # 输出特征数量(自动计算)
 output_size = len(label_names)
 
-# 输入特征归一化参数
+# 输入特征归一化参数（对应所有25个原始特征）
+# 注意：如果启用特征选择，这些参数会自动根据selected_feature_indices进行调整
 center = torch.tensor([
     [-1.3139e+00], [1.0176e+00], [1.0200e+00], [-3.7354e+00], [1.0356e+01],
     [-1.1160e+00], [-2.3052e+00], [-1.2784e+00], [4.4933e+00], [-2.2510e+00],
@@ -226,7 +261,7 @@ save_interval = 20
 #   - 中等数据集(总批次1000-5000): 0.5-0.8
 #   - 大数据集(总批次>5000): 0.3-0.5
 # 注意：DataLoader本身是shuffle的，所以每个epoch训练的batch都是随机的
-train_batch_ratio = 1
+train_batch_ratio = 1.0
 
 # ==================== 学习率调度器配置 ====================
 

@@ -13,7 +13,7 @@ def setup_device(device_str: str) -> torch.device:
         device_str: 设备字符串
             - 'cpu': 使用CPU
             - 'cuda': 使用默认GPU (GPU 0)
-            - '0', '1', '2', '2', ...: 直接指定GPU编号
+            - '0', '1', '2', '3', ...: 直接指定GPU编号
             - 'cuda:0', 'cuda:1', ...: 也支持这种格式
 
     返回:
@@ -36,7 +36,7 @@ def setup_device(device_str: str) -> torch.device:
         print(f"\n使用设备: CPU")
         return torch.device("cpu")
 
-    # 处理纯数字（如 '0', '1', '2', '2'）
+    # 处理纯数字（如 '0', '1', '2', '3'）
     if device_str.isdigit():
         if not torch.cuda.is_available():
             print(f"警告: CUDA不可用，回退到CPU")
@@ -171,22 +171,22 @@ def copy_config_file(config_path: str, save_dir: str):
     复制配置文件到保存目录
 
     支持的路径格式:
-    - configs.TCN.partial_motion_knee_config.py -> configs/TCN/partial_motion_knee_config.py
-    - configs.TCN.default_config -> configs/TCN/partial_motion_knee_config.py
-    - configs/TCN/partial_motion_knee_config.py -> configs/TCN/partial_motion_knee_config.py
-    - configs/TCN/default_config -> configs/TCN/partial_motion_knee_config.py
+    - configs.TCN.default_config.py -> configs/TCN/default_config.py
+    - configs.TCN.default_config -> configs/TCN/default_config.py
+    - configs/TCN/default_config.py -> configs/TCN/default_config.py
+    - configs/TCN/default_config -> configs/TCN/default_config.py
     """
     possible_paths = []
 
     # 处理已经带.py后缀的情况
     if config_path.endswith(".py"):
-        # 情况1: configs.TCN.partial_motion_knee_config.py
+        # 情况1: configs.TCN.default_config.py
         # 移除.py后缀，将点替换为路径分隔符，再加上.py
         path_without_py = config_path[:-3]  # 移除.py
         possible_paths.append(path_without_py.replace(".", os.sep) + ".py")
         possible_paths.append(path_without_py.replace(".", "/") + ".py")
 
-        # 情况2: configs/TCN/partial_motion_knee_config.py (已经是正确路径)
+        # 情况2: configs/TCN/default_config.py (已经是正确路径)
         possible_paths.append(config_path)
 
         # 情况3: 如果包含点，尝试将.py前的最后一个点替换为/

@@ -7,7 +7,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
-from utils.config_utils import load_config
+from utils.config_utils import *
 from utils.utils import *
 from models.predictor_model import PredictorTransformer
 from models.generative_model import GenerativeTransformer
@@ -23,7 +23,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--config_path", type=str, default="configs.default_config",
                     help="配置文件路径")
 parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu",
-                    help="训练设备 (cpu, cuda, 0, 1, 2, 2, ...)")
+                    help="训练设备 (cpu, cuda, 0, 1, 2, 3, ...)")
 parser.add_argument("--resume", type=str, default=None,
                     help="恢复训练的模型路径")
 parser.add_argument("--num_workers", type=int, default=16,
@@ -32,7 +32,7 @@ args = parser.parse_args()
 
 # 加载配置
 config = load_config(args.config_path)
-
+config = apply_feature_selection(config)
 
 def create_model(config, device: torch.device, resume_path: str = None) -> Tuple[nn.Module, int]:
     """创建或加载模型"""
@@ -416,7 +416,7 @@ def validate(model: nn.Module,
             all_labels = torch.cat(all_labels, dim=0)
 
             # 使用优化的重组方法
-            print(f"使用 '{reconstruction_method}' 方法重组序列...")
+            print(f"使用优化的 '{reconstruction_method}' 方法重组序列...")
             reconstructed_estimates, reconstructed_labels = reconstruct_sequences(
                 all_estimates, all_labels,
                 dataloader.dataset.trial_sequence_counts,

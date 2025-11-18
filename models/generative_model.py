@@ -386,7 +386,7 @@ if __name__ == "__main__":
     print(f"训练输出形状: {output_linear.shape}")
 
     # 测试损失计算
-    print("\n2. 测试损失计算")
+    print("\n3. 测试损失计算")
     criterion = nn.MSELoss()
     target = torch.randn(batch_size, output_size, sequence_length)
     loss = criterion(output_train, target)

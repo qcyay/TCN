@@ -293,6 +293,7 @@ class TcnDataset(Dataset):
         # 检查文件是否存在
         if not os.path.exists(input_file_path):
             raise FileNotFoundError(f"输入文件不存在: {input_file_path}")
+
         if not os.path.exists(label_file_path):
             raise FileNotFoundError(f"标签文件不存在: {label_file_path}")
 
@@ -301,6 +302,11 @@ class TcnDataset(Dataset):
             input_file_path,
             body_mass=self.participant_masses.get(participant, 1.0)
         )
+        # if valid_range is not None:
+        #     print(valid_range)
+        #     print(f"  {trial_dir}  输入数据长度: {input_data.size()}")
+        if torch.isnan(input_data).any():
+            print(f"警告：{trial_dir}中张量包含NaN值")
 
         # 加载标签数据（使用相同的有效范围）
         label_data = self._load_label_data(label_file_path, valid_range=valid_range)

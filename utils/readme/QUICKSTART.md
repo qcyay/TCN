@@ -88,7 +88,7 @@ python test_transformer.py --model_path path/to/model.tar --batch_size 64
 ### Transformer模型
 
 ```python
-# configs/partial_motion_knee_config.py
+# configs/default_config.py
 
 model_type = 'Transformer'
 sequence_length = 100    # 序列长度：50-200
@@ -96,17 +96,17 @@ d_model = 128            # 模型维度：64-256
 nhead = 8                # 注意力头数：4-16
 num_encoder_layers = 4   # Encoder层数：2-8
 batch_size = 32          # 批次大小：16-64
-learning_rate = 0.001    # 学习率：1e-4 to 1e-2
+learning_rate = 0.001    # 学习率：1e-4 to 1e-3
 ```
 
 ### TCN模型
 
 ```python
-# configs/partial_motion_knee_config.py
+# configs/default_config.py
 
 model_type = 'TCN'
 num_channels = [64, 64]  # 通道数
-ksize = 3                # 卷积核大小：2-7
+ksize = 3                # 卷积核大小：3-7
 eff_hist = 248           # 有效历史
 batch_size = 4           # 批次大小：2-8（变长序列）
 learning_rate = 0.001

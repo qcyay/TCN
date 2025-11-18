@@ -11,7 +11,7 @@ matplotlib.use('Agg')  # 关键：使用非交互式后端
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from torch.utils.data import DataLoader
-from utils.config_utils import load_config
+from utils.config_utils import *
 from utils.utils import *
 from models.predictor_model import PredictorTransformer
 from models.generative_model import GenerativeTransformer
@@ -35,7 +35,7 @@ args = parser.parse_args()
 
 # 加载配置
 config = load_config(args.config_path)
-
+config = apply_feature_selection(config)
 
 def load_model(model_path: str, device: torch.device):
     """加载训练好的模型"""

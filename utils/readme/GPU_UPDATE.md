@@ -14,7 +14,7 @@ python train.py --device 1
 # 使用 GPU 2
 python train.py --device 2
 
-# 使用 GPU 2
+# 使用 GPU 3
 python train.py --device 3
 ```
 
@@ -168,7 +168,7 @@ python train.py --device 0
 python train.py --device 0  # GPU 0
 python train.py --device 1  # GPU 1
 python train.py --device 2  # GPU 2
-python train.py --device 3  # GPU 2
+python train.py --device 3  # GPU 3
 ```
 
 **就是这么简单！** 🎯

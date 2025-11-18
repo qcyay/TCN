@@ -1,6 +1,8 @@
 import os
 import pandas as pd
 import torch
+import numpy as np
+from pathlib import Path
 
 center = torch.tensor([[-1.3139e+00],
          [ 1.0176e+00],
@@ -78,84 +80,62 @@ scale = torch.tensor([[6.4029e+01],
 # print(nums)
 # print(strs)
 
-# # 验证RMSE、R²和Normalized MAE的计算过程以及复现RMSE非常小时R²和Normalized MAE值异常的情况
-# scale = 10
-# # est = torch.rand(10, 50) * scale
-# # lbl = torch.rand(10, 50)
-# # lbl = est.clone()
-# est = torch.tensor([[0.5,0.5001,0.5002,0.5003,0.5004,0.5005,0.5006,0.5007,0.5008,0.5009,0.5010,0.5011,0.5012,0.5013,0.5014,0.5015,0.5016,0.5017,0.5018,0.5019,0.5020]])
-# lbl = torch.tensor([[0.55,0.5501,0.5502,0.5503,0.5504,0.5505,0.5506,0.5507,0.5508,0.5509,0.5510,0.5511,0.5512,0.5513,0.5514,0.5515,0.5516,0.5517,0.5518,0.5519,0.5520]])
-#
-# # est[0,:] = float('nan')
-#
-# # 创建有效数据掩码
-# valid_mask = ~torch.isnan(est) & ~torch.isnan(lbl)  # [batch_size, seq_len]
-#
-# # ============ 1. RMSE: 在所有有效数据点上计算 ============
-# est_flat = est[valid_mask]
-# lbl_flat = lbl[valid_mask]
-# rmse = torch.sqrt(torch.mean((est_flat - lbl_flat) ** 2))
-#
-# print(f'rmse:{rmse}')
-#
-# # ============ 2. R²: 向量化计算（每个序列） ============
-# # 计算每个序列的有效元素数量
-# valid_counts = valid_mask.sum(dim=1, keepdim=True).float()  # [batch_size, 1]
-#
-# # 用0填充NaN位置（配合mask使用，不影响计算）
-# est_filled = torch.where(valid_mask, est, torch.zeros_like(est))
-# lbl_filled = torch.where(valid_mask, lbl, torch.zeros_like(lbl))
-#
-# # 计算每个序列的label均值（只对有效元素）
-# lbl_sum = (lbl_filled * valid_mask.float()).sum(dim=1, keepdim=True)  # [batch_size, 1]
-# lbl_mean = lbl_sum / (valid_counts + 1e-8)  # [batch_size, 1]
-#
-# # 计算ss_res（残差平方和）
-# diff = lbl_filled - est_filled  # [batch_size, seq_len]
-# diff_sq = diff ** 2
-# ss_res = (diff_sq * valid_mask.float()).sum(dim=1)  # [batch_size]
-# print(f'ss_res:{ss_res}')
-#
-# # 计算ss_tot（总平方和）
-# lbl_centered = lbl_filled - lbl_mean  # [batch_size, seq_len]
-# lbl_centered_sq = lbl_centered ** 2
-# ss_tot = (lbl_centered_sq * valid_mask.float()).sum(dim=1)  # [batch_size]
-# print(f'ss_tot:{ss_tot}')
-#
-# # 计算R²
-# r2 = 1 - (ss_res / (ss_tot + 1e-8))  # [batch_size]
-#
-# # 只保留有效序列（至少有1个有效点）
-# valid_sequences = valid_counts.squeeze() > 0  # [batch_size]
-# r2_valid = r2[valid_sequences]
-# r2_mean = r2_valid.mean() if len(r2_valid) > 0 else torch.tensor(0.0, device=r2.device)
-#
-# print(f'r2_mean:{r2_mean}')
-#
-# # ============ 2. Normalized MAE: 向量化计算 ============
-# # 计算每个序列的label range（使用masked操作）
-# # 对于min，将无效位置设为inf；对于max，将无效位置设为-inf
-# lbl_for_max = torch.where(valid_mask, lbl_filled,
-#                           torch.full_like(lbl_filled, -float('inf')))
-# lbl_for_min = torch.where(valid_mask, lbl_filled,
-#                           torch.full_like(lbl_filled, float('inf')))
-#
-# lbl_max = lbl_for_max.max(dim=1, keepdim=True)[0]  # [batch_size, 1]
-# lbl_min = lbl_for_min.min(dim=1, keepdim=True)[0]  # [batch_size, 1]
-# label_range = lbl_max - lbl_min  # [batch_size, 1]
-# print(f'label_range:{label_range}')
-#
-# # 计算MAE
-# abs_diff = torch.abs(lbl_filled - est_filled)  # [batch_size, seq_len]
-# mae_sum = (abs_diff * valid_mask.float()).sum(dim=1, keepdim=True)  # [batch_size, 1]
-# mae = mae_sum / (valid_counts + 1e-8)  # [batch_size, 1]
-# print(f'mae:{mae}')
-#
-# # 归一化为百分数
-# mae_percent = (mae / (label_range + 1e-12)) * 100.0  # [batch_size, 1]
-#
-# # 只保留有效序列
-# mae_percent_valid = mae_percent.squeeze()[valid_sequences]
-# mae_percent_mean = mae_percent_valid.mean() if len(mae_percent_valid) > 0 else torch.tensor(0.0,
-#                                                                                             device=mae_percent.device)
-# print(f'mae_percent_mean:{mae_percent_mean}')
+# 验证csv文件读取功能
+def read_csv_first_row_to_tensor(csv_file_path, skip_header=True, dtype=torch.float32):
+    """
+    读取CSV文件的第一行数据并转换为PyTorch张量
+
+    参数:
+        csv_file_path (str): CSV文件的路径
+        skip_header (bool): 是否跳过标题行，默认为True
+        dtype: 目标张量的数据类型，默认为torch.float32
+
+    返回:
+        torch.Tensor: 包含第一行数据的PyTorch张量
+    """
+    try:
+        # 检查文件是否存在
+        if not Path(csv_file_path).exists():
+            raise FileNotFoundError(f"文件未找到: {csv_file_path}")
+
+        # 使用pandas读取CSV文件
+        # header=None表示不将第一行作为列名，skiprows跳过标题行（如果skip_header为True）
+        skip_rows = 1 if skip_header else 0
+        df = pd.read_csv(csv_file_path, header=None, skiprows=skip_rows, nrows=1)
+
+        # 检查是否成功读取到数据
+        if df.empty:
+            raise ValueError("CSV文件为空或没有数据行")
+
+        # 将第一行数据转换为numpy数组
+        first_row_np = df.iloc[0].values
+
+        # 将numpy数组转换为PyTorch张量
+        tensor = torch.tensor(first_row_np, dtype=dtype)
+
+        print(f"成功读取CSV文件: {csv_file_path}")
+        print(f"第一行数据形状: {tensor.shape}")
+        print(f"数据类型: {tensor.dtype}")
+        print(f"数据值: {tensor}")
+
+        return tensor
+
+    except FileNotFoundError as e:
+        print(f"错误: {e}")
+        return None
+    except pd.errors.EmptyDataError:
+        print("错误: CSV文件为空")
+        return None
+    except Exception as e:
+        print(f"读取CSV文件时发生错误: {e}")
+        return None
+
+csv_path = "a.csv"  # 替换为你的CSV文件路径
+result_tensor = read_csv_first_row_to_tensor(csv_path, skip_header=True)
+
+# 检查NaN
+if torch.isnan(result_tensor).any():
+    print("警告：张量包含NaN值")
+    print(f"NaN数量: {torch.isnan(result_tensor).sum().item()}")
+else:
+    print("张量数据正常")
