@@ -49,14 +49,6 @@ def apply_feature_selection(config):
 	# 获取选择的索引
 	selected_indices = config.selected_feature_indices
 
-	# 验证索引的有效性
-	max_features = len(config.input_names)
-	for idx in selected_indices:
-		if idx < 0 or idx >= max_features:
-			raise ValueError(
-				f"特征索引 {idx} 超出范围 [0, {max_features - 1}]"
-			)
-
 	# 保存原始配置（用于记录）
 	original_input_names = config.input_names.copy()
 	original_input_size = len(original_input_names)
@@ -94,130 +86,12 @@ def apply_feature_selection(config):
 		print(f"  {i:2d}. [原索引 {idx:2d}] {name}")
 
 	print(f"\n归一化参数已相应更新:")
-	print(f"  center shape: {config.center.shape}")
-	print(f"  scale shape: {config.scale.shape}")
+	print(f"  center: {config.center}")
+	print(f"  scale: {config.scale}")
 	print(f"{'=' * 60}\n")
 
 	return config
 
-
-def get_feature_group_indices(group_name: str) -> List[int]:
-	"""
-    获取预定义特征组的索引
-
-    特征索引对照表（共25个特征）:
-      0-2:   foot_imu  gyro (x, y, z)
-      3-5:   foot_imu  accel (x, y, z)
-      6-8:   shank_imu gyro (x, y, z)
-      9-11:  shank_imu accel (x, y, z)
-      12-14: thigh_imu gyro (x, y, z)
-      15-17: thigh_imu accel (x, y, z)
-      18-20: insole (cop_x, cop_z, force_y)
-      21:    hip_angle
-      22:    hip_angle_velocity_filt
-      23:    knee_angle
-      24:    knee_angle_velocity_filt
-
-    参数:
-        group_name: 特征组名称
-
-    支持的组名:
-        - 'all': 所有特征 (0-24)
-        - 'imu': 所有IMU传感器 (0-17)
-        - 'foot_imu': 脚部IMU (0-5)
-        - 'shank_imu': 小腿IMU (6-11)
-        - 'thigh_imu': 大腿IMU (12-17)
-        - 'insole': 压力鞋垫 (18-20)
-        - 'joint_angles': 关节角度和角速度 (21-24)
-        - 'imu_joint': IMU + 关节角度（不含鞋垫）(0-17, 21-24)
-
-    返回:
-        特征索引列表
-    """
-	feature_groups = {
-		'all': list(range(25)),
-		'imu': list(range(18)),
-		'foot_imu': list(range(0, 6)),
-		'shank_imu': list(range(6, 12)),
-		'thigh_imu': list(range(12, 18)),
-		'insole': list(range(18, 21)),
-		'joint_angles': list(range(21, 25)),
-		'imu_joint': list(range(18)) + list(range(21, 25)),
-	}
-
-	if group_name not in feature_groups:
-		available_groups = ', '.join(feature_groups.keys())
-		raise ValueError(
-			f"未知的特征组名称: '{group_name}'\n"
-			f"可用的组名: {available_groups}"
-		)
-
-	return feature_groups[group_name]
-
-
-def print_feature_indices():
-	"""
-    打印所有特征的索引对照表
-    """
-	feature_names = [
-		"foot_imu_*_gyro_x", "foot_imu_*_gyro_y", "foot_imu_*_gyro_z",
-		"foot_imu_*_accel_x", "foot_imu_*_accel_y", "foot_imu_*_accel_z",
-		"shank_imu_*_gyro_x", "shank_imu_*_gyro_y", "shank_imu_*_gyro_z",
-		"shank_imu_*_accel_x", "shank_imu_*_accel_y", "shank_imu_*_accel_z",
-		"thigh_imu_*_gyro_x", "thigh_imu_*_gyro_y", "thigh_imu_*_gyro_z",
-		"thigh_imu_*_accel_x", "thigh_imu_*_accel_y", "thigh_imu_*_accel_z",
-		"insole_*_cop_x", "insole_*_cop_z", "insole_*_force_y",
-		"hip_angle_*", "hip_angle_*_velocity_filt",
-		"knee_angle_*", "knee_angle_*_velocity_filt"
-	]
-
-	print("\n" + "=" * 70)
-	print("特征索引对照表 (共25个特征)")
-	print("=" * 70)
-
-	categories = [
-		("脚部IMU", 0, 6),
-		("小腿IMU", 6, 12),
-		("大腿IMU", 12, 18),
-		("压力鞋垫", 18, 21),
-		("关节角度", 21, 25)
-	]
-
-	for category_name, start_idx, end_idx in categories:
-		print(f"\n{category_name}:")
-		for i in range(start_idx, end_idx):
-			print(f"  [{i:2d}] {feature_names[i]}")
-
-	print("\n" + "=" * 70)
-
-	# 打印预定义组
-	print("\n预定义特征组:")
-	groups = {
-		'all': '所有特征',
-		'imu': '所有IMU传感器',
-		'foot_imu': '脚部IMU',
-		'shank_imu': '小腿IMU',
-		'thigh_imu': '大腿IMU',
-		'insole': '压力鞋垫',
-		'joint_angles': '关节角度和角速度',
-		'imu_joint': 'IMU + 关节角度（不含鞋垫）'
-	}
-
-	for group_key, group_desc in groups.items():
-		indices = get_feature_group_indices(group_key)
-		print(f"  '{group_key}': {group_desc}")
-		print(f"    索引: {indices}")
-
-	print("=" * 70 + "\n")
-
-
 # 示例用法
 if __name__ == "__main__":
-	# 打印特征索引对照表
-	print_feature_indices()
-
-	# 测试特征组获取
-	print("\n测试特征组获取:")
-	for group_name in ['imu', 'joint_angles', 'imu_joint']:
-		indices = get_feature_group_indices(group_name)
-		print(f"{group_name}: {indices}")
+	pass

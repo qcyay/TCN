@@ -149,6 +149,7 @@ class SequenceDataset(Dataset):
 
         # 拼接所有输出通道
         label_seq = np.concatenate(label_seqs, axis=0)  # [num_outputs, output_sequence_length]
+        # breakpoint()
 
         # 转换为tensor
         input_seq = torch.from_numpy(input_seq).float()

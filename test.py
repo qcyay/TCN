@@ -45,51 +45,7 @@ def load_model(model_path: str, device: torch.device):
     model_type = checkpoint.get("model_type", "TCN")
     print(f"模型类型: {model_type}")
 
-    if model_type == "GenerativeTransformer":
-        model = GenerativeTransformer(
-            input_size=checkpoint["input_size"],
-            output_size=checkpoint["output_size"],
-            d_model=checkpoint["d_model"],
-            nhead=checkpoint["nhead"],
-            num_encoder_layers=checkpoint["num_encoder_layers"],
-            num_decoder_layers=checkpoint["num_decoder_layers"],
-            dim_feedforward=checkpoint["dim_feedforward"],
-            dropout=checkpoint["dropout"],
-            sequence_length=checkpoint["sequence_length"],
-            encoder_type=checkpoint["encoder_type"],
-            use_positional_encoding=checkpoint["use_positional_encoding"],
-            center=checkpoint["center"],
-            scale=checkpoint["scale"]
-        ).to(device)
-    elif model_type == "Transformer":
-        model = PredictorTransformer(
-            input_size=checkpoint["input_size"],
-            output_size=checkpoint["output_size"],
-            d_model=checkpoint["d_model"],
-            nhead=checkpoint["nhead"],
-            num_encoder_layers=checkpoint["num_encoder_layers"],
-            dim_feedforward=checkpoint["dim_feedforward"],
-            dropout=checkpoint["dropout"],
-            sequence_length=checkpoint["sequence_length"],
-            output_sequence_length=checkpoint["output_sequence_length"],
-            use_positional_encoding=checkpoint["use_positional_encoding"],
-            center=checkpoint["center"],
-            scale=checkpoint["scale"]
-        ).to(device)
-    else:  # TCN
-        model = TCN(
-            input_size=checkpoint["input_size"],
-            output_size=checkpoint["output_size"],
-            num_channels=checkpoint["num_channels"],
-            ksize=checkpoint["ksize"],
-            dropout=checkpoint["dropout"],
-            eff_hist=checkpoint["eff_hist"],
-            spatial_dropout=checkpoint["spatial_dropout"],
-            activation=checkpoint["activation"],
-            norm=checkpoint["norm"],
-            center=checkpoint["center"],
-            scale=checkpoint["scale"]
-        ).to(device)
+    model = create_model_from_config(model_type, checkpoint, None, device)
 
     model.load_state_dict(checkpoint["state_dict"])
     print(f"模型加载成功! Epoch: {checkpoint.get('epoch', 'N/A')}")

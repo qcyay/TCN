@@ -3,7 +3,86 @@ import shutil
 from typing import List, Tuple, Dict
 import random
 import numpy as np
+import inspect
 import torch
+from models.predictor_model import PredictorTransformer
+from models.generative_model import GenerativeTransformer
+from models.tcn import TCN
+
+# 记录“模型 __init__ 参数名” 到 “config 中字段名”的映射
+# 没写在这里的默认认为两边同名
+CONFIG_ALIAS = {
+    "GenerativeTransformer": {
+        "d_model": "gen_d_model",
+        "nhead": "gen_nhead",
+        "num_encoder_layers": "gen_num_encoder_layers",
+        "num_decoder_layers": "gen_num_decoder_layers",
+        "dim_feedforward": "gen_dim_feedforward",
+        "dropout": "gen_dropout",
+        "sequence_length": "gen_sequence_length",
+        # encoder_type / use_positional_encoding / center / scale 同名就不用写了
+    },
+    "Transformer": {
+        "dropout": "transformer_dropout",
+        # 其它：d_model / nhead / sequence_length / output_sequence_length 等同名
+    },
+    "TCN": {
+        # TCN 这边假设基本同名，就不用写映射了
+    },
+}
+
+def create_model_from_config(model_type, checkpoint=None, config=None, device=None):
+    """
+    根据 model_type + config (+ 可选 checkpoint) 创建模型。
+    - checkpoint 为 None：所有超参数来自 config（带别名映射）
+    - checkpoint 不为 None：优先用 checkpoint[name]，否则用 config 对应字段
+    """
+
+    model_classes = {
+        "GenerativeTransformer": GenerativeTransformer,
+        "Transformer": PredictorTransformer,
+        "TCN": TCN,
+    }
+    model_class = model_classes[model_type]
+    alias_map = CONFIG_ALIAS.get(model_type, {})
+
+    sig = inspect.signature(model_class.__init__)
+    params = {}
+    sources = {}
+
+    # 分两种情况写清楚一点
+    if checkpoint is None:
+        # 完全新建模型，所有参数来自 config
+        for name, p in sig.parameters.items():
+            if name == "self":
+                continue
+
+            cfg_attr = alias_map.get(name, name)  # 映射到 config 字段名
+            if hasattr(config, cfg_attr):
+                params[name] = getattr(config, cfg_attr)
+                sources[name] = f"config.{cfg_attr}"
+    else:
+        # 从 checkpoint 恢复，优先 checkpoint，其次 config
+        for name, p in sig.parameters.items():
+            if name == "self":
+                continue
+
+            if name in checkpoint:
+                params[name] = checkpoint[name]
+                sources[name] = "checkpoint"
+            else:
+                cfg_attr = alias_map.get(name, name)
+                if hasattr(config, cfg_attr):
+                    params[name] = getattr(config, cfg_attr)
+                    sources[name] = f"config.{cfg_attr}"
+                # 两边都没有就跳过，让 __init__ 用默认值（如果有）
+
+    print(f"Creating {model_type} with parameters:")
+    for k, v in params.items():
+        print(f"  {k} ({sources.get(k, 'unknown')}): {v}")
+
+    model = model_class(**params).to(device)
+    return model
 
 def setup_device(device_str: str) -> torch.device:
     """
@@ -253,6 +332,7 @@ def reconstruct_sequences(
     # 按trial_sequence_counts分割预测和标签
     estimates_splits = torch.split(all_estimates, trial_sequence_counts, dim=0)
     labels_splits = torch.split(all_labels, trial_sequence_counts, dim=0)
+    # breakpoint()
 
     if method == "only_first":
         # 每组只取第一个时间步（索引0），然后沿着时间维度拼接
@@ -393,3 +473,26 @@ def reconstruct_sequences_from_predictions(
         reconstructed_labels.append(trial_label)
 
     return reconstructed_estimates, reconstructed_labels
+
+if __name__ == '__main__':
+
+    from types import SimpleNamespace
+
+    config = SimpleNamespace()
+
+    # config 对象
+    config.input_size = 10
+    config.output_size = 5
+    config.d_model = 512
+    config.transformer_dropout = 0.2
+
+    # checkpoint 内容（可能包含部分覆盖参数）
+    checkpoint = {
+        'input_size': 12,  # 覆盖config中的值
+        # 没有output_size，使用config默认值
+        'd_model': 256  # 覆盖config中的值
+    }
+
+    # 调用函数
+    # model = create_model_from_config('Transformer', None, config, 'cpu')
+    model = create_model_from_config('Transformer', checkpoint, config, 'cpu')

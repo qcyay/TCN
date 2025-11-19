@@ -44,101 +44,13 @@ def create_model(config, device: torch.device, resume_path: str = None) -> Tuple
         start_epoch = checkpoint.get("epoch", 0) + 1
 
         # 根据模型类型创建模型
-        if model_type == 'GenerativeTransformer':
-            model = GenerativeTransformer(
-                input_size=checkpoint.get("input_size", config.input_size),
-                output_size=checkpoint.get("output_size", config.output_size),
-                d_model=checkpoint.get("d_model", config.gen_d_model),
-                nhead=checkpoint.get("nhead", config.gen_nhead),
-                num_encoder_layers=checkpoint.get("num_encoder_layers", config.gen_num_encoder_layers),
-                num_decoder_layers=checkpoint.get("num_decoder_layers", config.gen_num_decoder_layers),
-                dim_feedforward=checkpoint.get("dim_feedforward", config.gen_dim_feedforward),
-                dropout=checkpoint.get("dropout", config.gen_dropout),
-                sequence_length=checkpoint.get("sequence_length", config.gen_sequence_length),
-                encoder_type=checkpoint.get("encoder_type", config.encoder_type),
-                use_positional_encoding=checkpoint.get("use_positional_encoding", config.use_positional_encoding),
-                center=checkpoint.get("center", config.center),
-                scale=checkpoint.get("scale", config.scale)
-            ).to(device)
-        elif model_type == 'Transformer':
-            model = PredictorTransformer(
-                input_size=checkpoint.get("input_size", config.input_size),
-                output_size=checkpoint.get("output_size", config.output_size),
-                d_model=checkpoint.get("d_model", config.d_model),
-                nhead=checkpoint.get("nhead", config.nhead),
-                num_encoder_layers=checkpoint.get("num_encoder_layers", config.num_encoder_layers),
-                dim_feedforward=checkpoint.get("dim_feedforward", config.dim_feedforward),
-                dropout=checkpoint.get("dropout", config.transformer_dropout),
-                sequence_length=checkpoint.get("sequence_length", config.sequence_length),
-                output_sequence_length = checkpoint.get("output_sequence_length", config.output_sequence_length),
-                use_positional_encoding=checkpoint.get("use_positional_encoding", config.use_positional_encoding),
-                center=checkpoint.get("center", config.center),
-                scale=checkpoint.get("scale", config.scale)
-            ).to(device)
-        else:  # TCN
-            model = TCN(
-                input_size=checkpoint.get("input_size", config.input_size),
-                output_size=checkpoint.get("output_size", config.output_size),
-                num_channels=checkpoint.get("num_channels", config.num_channels),
-                ksize=checkpoint.get("ksize", config.ksize),
-                dropout=checkpoint.get("dropout", config.dropout),
-                eff_hist=checkpoint.get("eff_hist", config.eff_hist),
-                spatial_dropout=checkpoint.get("spatial_dropout", config.spatial_dropout),
-                activation=checkpoint.get("activation", config.activation),
-                norm=checkpoint.get("norm", config.norm),
-                center=checkpoint.get("center", config.center),
-                scale=checkpoint.get("scale", config.scale)
-            ).to(device)
+        model = create_model_from_config(model_type, checkpoint, config, device)
 
         model.load_state_dict(checkpoint["state_dict"])
         print(f"模型已加载,从第 {start_epoch} 轮继续训练")
     else:
         print(f"创建新的{model_type}模型")
-        if model_type == 'GenerativeTransformer':
-            model = GenerativeTransformer(
-                input_size=config.input_size,
-                output_size=config.output_size,
-                d_model=config.gen_d_model,
-                nhead=config.gen_nhead,
-                num_encoder_layers=config.gen_num_encoder_layers,
-                num_decoder_layers=config.gen_num_decoder_layers,
-                dim_feedforward=config.gen_dim_feedforward,
-                dropout=config.gen_dropout,
-                sequence_length=config.gen_sequence_length,
-                encoder_type=config.encoder_type,
-                use_positional_encoding=config.use_positional_encoding,
-                center=config.center,
-                scale=config.scale
-            ).to(device)
-        elif model_type == 'Transformer':
-            model = PredictorTransformer(
-                input_size=config.input_size,
-                output_size=config.output_size,
-                d_model=config.d_model,
-                nhead=config.nhead,
-                num_encoder_layers=config.num_encoder_layers,
-                dim_feedforward=config.dim_feedforward,
-                dropout=config.transformer_dropout,
-                sequence_length=config.sequence_length,
-                output_sequence_length=config.output_sequence_length,
-                use_positional_encoding=config.use_positional_encoding,
-                center=config.center,
-                scale=config.scale
-            ).to(device)
-        else:  # TCN
-            model = TCN(
-                input_size=config.input_size,
-                output_size=config.output_size,
-                num_channels=config.num_channels,
-                ksize=config.ksize,
-                dropout=config.dropout,
-                eff_hist=config.eff_hist,
-                spatial_dropout=config.spatial_dropout,
-                activation=config.activation,
-                norm=config.norm,
-                center=config.center,
-                scale=config.scale
-            ).to(device)
+        model = create_model_from_config(model_type, None, config, device)
         start_epoch = 0
         print(f"新模型已创建，参数数量: {sum(p.numel() for p in model.parameters()):,}")
 
@@ -811,6 +723,7 @@ def main():
 
                 valid_mask = ~torch.isnan(estimates) & ~torch.isnan(label_data)
                 if valid_mask.sum() > 0:
+                    # breakpoint()
                     loss = criterion(estimates[valid_mask], label_data[valid_mask])
 
                     optimizer.zero_grad()
@@ -836,7 +749,7 @@ def main():
                 for i in range(len(trial_lengths)):
                     est_trial = estimates[i, :, model_history:trial_lengths[i]]
                     lbl_trial = label_data[i, :, model_history:trial_lengths[i]]
-
+                    # breakpoint()
                     # 找到最大delay
                     max_delay = max(config.model_delays)
                     valid_length = est_trial.size(1) - max_delay
@@ -861,6 +774,8 @@ def main():
                         lbl_valid = lbl[valid_mask]
 
                         if len(est_valid) > 0:
+                            if torch.isnan(criterion(est_valid, lbl_valid)):
+                                print(f"NaN at trial={i}, channel={j}")
                             batch_losses.append(criterion(est_valid, lbl_valid))
 
                 if len(batch_losses) > 0:

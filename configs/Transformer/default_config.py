@@ -70,7 +70,7 @@ selected_feature_indices = None
 # 是否启用基于action_patterns的数据筛选
 # True: 只使用action_patterns中指定的运动类型
 # False: 使用所有可用的数据文件（忽略action_patterns）
-enable_action_filter = True
+enable_action_filter = False
 
 # 运动类型筛选模式（使用正则表达式）
 # 注释掉某一行可以排除该运动类型
@@ -109,10 +109,11 @@ action_patterns = [
 
 # 模型输出(预测)的标签名称
 label_names = ["hip_flexion_*_moment", "knee_angle_*_moment"]
+# label_names = ["knee_angle_*_moment"]
 
 # 模型预测的延迟(单位:数据点)
 # 数据采样率为200Hz,每个点代表5ms
-model_delays = [10, 0]
+model_delays = [0, 0]
 
 # 参与者体重字典(单位:kg)
 participant_masses = {

@@ -10,7 +10,7 @@ model_type = 'Transformer'
 # ==================== 数据配置 ====================
 
 # 相对路径:训练好的模型保存位置
-model_path = os.path.join("logs", "trained_transformer_thigh_imu_and_knee_angle_knee_config", "0", "best_model.tar")
+model_path = os.path.join("logs", "trained_transformer_thigh_imu_and_knee_angle_knee_config", "1", "best_model.tar")
 
 # 相对路径:数据目录
 data_dir = 'data'
@@ -112,7 +112,7 @@ label_names = ["knee_angle_*_moment"]
 
 # 模型预测的延迟(单位:数据点)
 # 数据采样率为200Hz,每个点代表5ms
-model_delays = [10, 0]
+model_delays = [0]
 
 # 参与者体重字典(单位:kg)
 participant_masses = {
@@ -261,7 +261,7 @@ save_interval = 20
 #   - 中等数据集(总批次1000-5000): 0.5-0.8
 #   - 大数据集(总批次>5000): 0.3-0.5
 # 注意：DataLoader本身是shuffle的，所以每个epoch训练的batch都是随机的
-train_batch_ratio = 1.0
+train_batch_ratio = 0.4
 
 # ==================== 学习率调度器配置 ====================
 

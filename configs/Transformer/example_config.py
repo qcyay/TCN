@@ -33,6 +33,7 @@ input_names = [
 
 # 模型输出(预测)的标签名称
 label_names = ["hip_flexion_*_moment", "knee_angle_*_moment"]
+# label_names = ["knee_angle_*_moment"]
 
 # 模型预测的延迟(单位:数据点)
 # 数据采样率为200Hz,每个点代表5ms
@@ -50,13 +51,14 @@ participant_masses = {
 
 # ==================== 通用模型配置 ====================
 
-# 输入特征数量(自动计算)
+# 输入特征数量(如果启用特征选择，会自动更新)
 input_size = len(input_names)
 
 # 输出特征数量(自动计算)
 output_size = len(label_names)
 
-# 输入特征归一化参数
+# 输入特征归一化参数（对应所有25个原始特征）
+# 注意：如果启用特征选择，这些参数会自动根据selected_feature_indices进行调整
 center = torch.tensor([
     [-1.3139e+00], [1.0176e+00], [1.0200e+00], [-3.7354e+00], [1.0356e+01],
     [-1.1160e+00], [-2.3052e+00], [-1.2784e+00], [4.4933e+00], [-2.2510e+00],
@@ -98,8 +100,13 @@ eff_hist = 248
 
 # ==================== Transformer预测模型配置 ====================
 
-# 序列长度（滑动窗口大小）
-sequence_length = 100
+# 输入序列长度（滑动窗口大小）
+sequence_length = 200
+
+# 输出序列长度（预测或生成的序列长度）
+# 对于预测模型：决定预测的时间步数
+# 对于生成式模型：决定生成的时间步数
+output_sequence_length = 1
 
 # Transformer隐藏维度
 d_model = 128
@@ -108,10 +115,10 @@ d_model = 128
 nhead = 8
 
 # Encoder层数
-num_encoder_layers = 4
+num_encoder_layers = 3
 
 # 前馈网络维度
-dim_feedforward = 512
+dim_feedforward = 256
 
 # Transformer的dropout
 transformer_dropout = 0.1
@@ -131,7 +138,7 @@ gen_num_encoder_layers = 3     # 编码器层数（如果使用transformer encod
 gen_num_decoder_layers = 3     # 解码器层数
 gen_dim_feedforward = 512      # 前馈网络维度
 gen_dropout = 0.1              # Dropout比率
-gen_sequence_length = 100      # 序列长度
+gen_sequence_length = 100      # 编码器输入序列长度
 
 # 自回归生成时的起始token值（可以是0或其他合理值）
 start_token_value = 0.0
@@ -150,22 +157,36 @@ reconstruction_method = 'only_first'
 # ==================== 训练配置 ====================
 
 # 训练轮数
-num_epochs = 1000
+num_epochs = 500
 
-# 批次大小
-batch_size = 32
+# 训练批次大小
+batch_size = 128
+
+# 测试批次大小（可以与训练批次大小不同）
+test_batch_size = 1024
 
 # 学习率
-learning_rate = 0.001
+learning_rate = 0.0001
 
 # 权重衰减(L2正则化系数)
 weight_decay = 1e-5
 
 # 验证间隔(每隔多少轮在测试集上验证一次)
-val_interval = 2
+val_interval = 1
 
 # 模型保存间隔(每隔多少轮保存一次模型)
-save_interval = 50
+save_interval = 20
+
+# ==================== 训练批次比例配置 ====================
+# 每个epoch使用的批次比例（0.0-1.0）
+# 1.0表示使用全部批次，0.4表示每个epoch只训练前40%的批次
+# 这个参数对于大数据集的Transformer训练特别有用，可以显著加快训练速度
+# 推荐值：
+#   - 小数据集(总批次<1000): 1.0 (使用全部数据)
+#   - 中等数据集(总批次1000-5000): 0.5-0.8
+#   - 大数据集(总批次>5000): 0.3-0.5
+# 注意：DataLoader本身是shuffle的，所以每个epoch训练的batch都是随机的
+train_batch_ratio = 0.4
 
 # ==================== 学习率调度器配置 ====================
 
