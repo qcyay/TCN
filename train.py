@@ -57,130 +57,6 @@ def create_model(config, device: torch.device, resume_path: str = None) -> Tuple
     return model, start_epoch
 
 
-def compute_metrics_on_sequences(
-        estimates_list: List[torch.Tensor],
-        labels_list: List[torch.Tensor],
-        num_outputs: int
-) -> Dict:
-    """
-    在完整序列上计算指标
-
-    参数:
-        estimates_list: List[Tensor[num_outputs, seq_len]] 每个trial的预测序列
-        labels_list: List[Tensor[num_outputs, seq_len]] 每个trial的标签序列
-        num_outputs: 输出通道数
-
-    返回:
-        metrics: 包含每个输出通道指标的字典
-    """
-    metrics = {}
-
-    for j in range(num_outputs):
-        rmse_sum = 0.0
-        r2_sum = 0.0
-        mae_percent_sum = 0.0
-        count = 0
-
-        for est_seq, lbl_seq in zip(estimates_list, labels_list):
-            est = est_seq[j]  # [seq_len]
-            lbl = lbl_seq[j]  # [seq_len]
-
-            # 创建有效数据掩码
-            valid_mask = ~torch.isnan(est) & ~torch.isnan(lbl)
-
-            if valid_mask.sum() == 0:
-                continue
-
-            est_valid = est[valid_mask]
-            lbl_valid = lbl[valid_mask]
-
-            # RMSE
-            rmse = torch.sqrt(torch.mean((est_valid - lbl_valid) ** 2))
-
-            # R²
-            ss_res = torch.sum((lbl_valid - est_valid) ** 2)
-            ss_tot = torch.sum((lbl_valid - torch.mean(lbl_valid)) ** 2)
-            r2 = 1 - (ss_res / (ss_tot + 1e-8))
-
-            # MAE as percentage
-            label_range = torch.max(lbl_valid) - torch.min(lbl_valid)
-            mae = torch.mean(torch.abs(est_valid - lbl_valid))
-            mae_percent = (mae / (label_range + 1e-8)) * 100.0
-
-            rmse_sum += rmse.item()
-            r2_sum += r2.item()
-            mae_percent_sum += mae_percent.item()
-            count += 1
-
-        if count > 0:
-            metrics[f"output_{j}"] = {
-                "rmse": rmse_sum / count,
-                "r2": r2_sum / count,
-                "mae_percent": mae_percent_sum / count,
-                "count": count
-            }
-        else:
-            metrics[f"output_{j}"] = {
-                "rmse": 0.0,
-                "r2": 0.0,
-                "mae_percent": 0.0,
-                "count": 0
-            }
-
-    return metrics
-
-
-def compute_metrics_tcn_trial(estimates: torch.Tensor,
-                              labels: torch.Tensor,
-                              valid_mask: torch.Tensor,
-                              num_outputs: int) -> dict:
-    """
-    TCN模型的指标计算（针对单个长序列试验）
-
-    策略：所有指标在整个长序列上计算
-    """
-    metrics = {}
-
-    for j in range(num_outputs):
-        est = estimates[j]
-        lbl = labels[j]
-        mask = valid_mask[j]
-
-        if mask.sum() == 0:
-            metrics[f"output_{j}"] = {
-                "rmse": 0.0,
-                "r2": 0.0,
-                "mae_percent": 0.0,
-                "count": 0
-            }
-            continue
-
-        est_valid = est[mask]
-        lbl_valid = lbl[mask]
-
-        # RMSE
-        rmse = torch.sqrt(torch.mean((est_valid - lbl_valid) ** 2))
-
-        # R²
-        ss_res = torch.sum((lbl_valid - est_valid) ** 2)
-        ss_tot = torch.sum((lbl_valid - torch.mean(lbl_valid)) ** 2)
-        r2 = 1 - (ss_res / (ss_tot + 1e-8))
-
-        # MAE as percentage
-        label_range = torch.max(lbl_valid) - torch.min(lbl_valid)
-        mae = torch.mean(torch.abs(est_valid - lbl_valid))
-        mae_percent = (mae / (label_range + 1e-8)) * 100.0
-
-        metrics[f"output_{j}"] = {
-            "rmse": rmse.item(),
-            "r2": r2.item(),
-            "mae_percent": mae_percent.item(),
-            "count": 1
-        }
-
-    return metrics
-
-
 def validate(model: nn.Module,
              dataloader: DataLoader,
              label_names: List[str],
@@ -349,7 +225,8 @@ def validate(model: nn.Module,
         result_dict[label_name] = {
             "rmse": metrics_accumulator[f"output_{j}"]["rmse"],
             "r2": metrics_accumulator[f"output_{j}"]["r2"],
-            "mae_percent": metrics_accumulator[f"output_{j}"]["mae_percent"]
+            "mae_percent": metrics_accumulator[f"output_{j}"]["mae_percent"],
+            "count":metrics_accumulator[f"output_{j}"]["count"]
         }
 
     model.train()
@@ -655,7 +532,8 @@ def main():
         result_str = (f"\n{label_name}:\n"
                       f"  RMSE: {metrics['rmse']:.4f} Nm/kg\n"
                       f"  R²: {metrics['r2']:.4f}\n"
-                      f"  MAE: {metrics['mae_percent']:.2f}%")
+                      f"  MAE: {metrics['mae_percent']:.2f}%\n"
+                      f"  VALID COUNT: {metrics['count']}")
         print(result_str)
         initial_log_content += result_str + "\n"
 
@@ -773,13 +651,19 @@ def main():
                         est_valid = est[valid_mask]
                         lbl_valid = lbl[valid_mask]
 
+                        # if len(est_valid) == 0:
+                        #     breakpoint()
+
                         if len(est_valid) > 0:
-                            if torch.isnan(criterion(est_valid, lbl_valid)):
-                                print(f"NaN at trial={i}, channel={j}")
+                            # if torch.isnan(criterion(est_valid, lbl_valid)):
+                            #     print(f"NaN at trial={i}, channel={j}")
                             batch_losses.append(criterion(est_valid, lbl_valid))
 
                 if len(batch_losses) > 0:
                     loss = torch.stack(batch_losses).mean()
+                    if torch.isnan(loss):
+                        print("❌ Loss is NaN!")
+                        breakpoint()
                     optimizer.zero_grad()
                     loss.backward()
                     torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
@@ -809,7 +693,8 @@ def main():
                 result_str = (f"{label_name}:\n"
                               f"  RMSE: {metrics['rmse']:.4f} Nm/kg\n"
                               f"  R²: {metrics['r2']:.4f}\n"
-                              f"  MAE: {metrics['mae_percent']:.2f}%")
+                              f"  MAE: {metrics['mae_percent']:.2f}%\n"
+                              f"  VALID COUNT: {metrics['count']}")
                 print(result_str)
                 val_log_content += result_str + "\n"
 
@@ -871,7 +756,8 @@ def main():
             result_str = (f"\n{label_name}:\n"
                           f"  RMSE: {metrics['rmse']:.4f} Nm/kg\n"
                           f"  R²: {metrics['r2']:.4f}\n"
-                          f"  MAE: {metrics['mae_percent']:.2f}%")
+                          f"  MAE: {metrics['mae_percent']:.2f}%\n"
+                          f"  VALID COUNT: {metrics['count']}")
             print(result_str)
             best_log_content += result_str + "\n"
 

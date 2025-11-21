@@ -76,7 +76,8 @@ class TcnDataset(Dataset):
         self.nan_removal_stats = {
             'trials_with_nan': 0,
             'total_rows_removed': 0,
-            'trials_processed': 0
+            'trials_processed': 0,
+            'trials_with_all_nan_labels': 0  # 新增：标签全为NaN的试验数
         }
 
         filter_status = "启用" if self.enable_action_filter else "禁用"
@@ -88,6 +89,9 @@ class TcnDataset(Dataset):
         self.all_label_data = []  # 存储所有试验的标签数据
         self.trial_lengths = []  # 存储每个试验的原始长度
         self._preload_all_data()
+
+        # === 检测并移除标签全为NaN的序列 ===
+        self._remove_invalid_label_sequences()
 
         print(f"数据集初始化完成 - 模式: {self.mode}, 试验数量: {len(self.trial_names)}")
         if self.remove_nan:
@@ -135,6 +139,8 @@ class TcnDataset(Dataset):
                 # 从numpy转换为tensor
                 input_data = torch.from_numpy(self.all_input_data[i]).float()
                 label_data = torch.from_numpy(self.all_label_data[i]).float()
+
+            # print(f"加载试验名称: {self.trial_names[i]}， 尺寸为 {input_data.size()}")
 
             # 添加batch维度 [C, N] -> [1, C, N]
             input_data = input_data.unsqueeze(0)
@@ -319,6 +325,50 @@ class TcnDataset(Dataset):
             self.trial_lengths.append(input_data.shape[1])
 
         print("所有数据预加载完成!")
+
+    def _remove_invalid_label_sequences(self):
+        """
+        检测并移除标签全为NaN的序列
+        同时更新trial_names、all_input_data、all_label_data和trial_lengths
+        """
+        if not self.remove_nan:
+            return
+
+        print("检测标签全为NaN的序列...")
+
+        valid_indices = []
+        removed_trials = []
+
+        for idx in range(len(self.trial_names)):
+            label_data = self.all_label_data[idx]
+
+            # 检查标签数据是否全为NaN
+            if isinstance(label_data, np.ndarray):
+                is_all_nan = np.all(np.isnan(label_data))
+            else:  # torch.Tensor
+                is_all_nan = torch.all(torch.isnan(label_data)).item()
+
+            if is_all_nan:
+                removed_trials.append(self.trial_names[idx])
+                self.nan_removal_stats['trials_with_all_nan_labels'] += 1
+            else:
+                valid_indices.append(idx)
+
+        # 如果有需要移除的试验
+        if removed_trials:
+            print(f"  发现 {len(removed_trials)} 个标签全为NaN的试验，正在移除...")
+            for trial_name in removed_trials:
+                print(f"    - {trial_name}")
+
+            # 更新所有相关列表
+            self.trial_names = [self.trial_names[i] for i in valid_indices]
+            self.all_input_data = [self.all_input_data[i] for i in valid_indices]
+            self.all_label_data = [self.all_label_data[i] for i in valid_indices]
+            self.trial_lengths = [self.trial_lengths[i] for i in valid_indices]
+
+            print(f"  移除完成，剩余 {len(self.trial_names)} 个有效试验")
+        else:
+            print("  未发现标签全为NaN的序列")
 
     def _load_trial_data(self, trial_name: str) -> Tuple[torch.Tensor, torch.Tensor]:
         '''
@@ -518,6 +568,7 @@ class TcnDataset(Dataset):
         print(f"处理的试验总数: {stats['trials_processed']}")
         print(f"包含NaN的试验数: {stats['trials_with_nan']}")
         print(f"移除的数据行总数: {stats['total_rows_removed']}")
+        print(f"标签全为NaN的试验数: {stats['trials_with_all_nan_labels']}")
 
         if stats['trials_processed'] > 0:
             nan_trial_percentage = 100 * stats['trials_with_nan'] / stats['trials_processed']

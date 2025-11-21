@@ -85,6 +85,11 @@ class SequenceDataset(Dataset):
         # 获取试验名称列表
         self.trial_names = self._get_trial_names()
 
+        # 统计信息
+        self.nan_removal_stats = {
+            'trials_with_all_nan_labels': 0  # 标签全为NaN的试验数
+        }
+
         filter_status = "启用" if self.enable_action_filter else "禁用"
         print(f"开始加载 {self.mode} 数据集 ({model_type})...")
         print(f"找到 {len(self.trial_names)} 个试验 (动作筛选: {filter_status})")
@@ -93,6 +98,9 @@ class SequenceDataset(Dataset):
         self.all_input_data = []  # 存储所有试验的输入数据
         self.all_label_data = []  # 存储所有试验的标签数据
         self._preload_all_data()
+
+        # === 检测并移除标签全为NaN的序列 ===
+        self._remove_invalid_label_sequences()
 
         # 生成序列索引
         print(f"生成序列索引...")
@@ -104,6 +112,9 @@ class SequenceDataset(Dataset):
         print(f"数据集初始化完成 - 模式: {self.mode}, "
               f"试验数量: {len(self.trial_names)}, "
               f"序列数量: {len(self.sequences)}")
+
+        if self.remove_nan and self.nan_removal_stats['trials_with_all_nan_labels'] > 0:
+            self.print_nan_removal_summary()
 
     def __len__(self):
         '''返回数据集中序列的总数'''
@@ -149,7 +160,6 @@ class SequenceDataset(Dataset):
 
         # 拼接所有输出通道
         label_seq = np.concatenate(label_seqs, axis=0)  # [num_outputs, output_sequence_length]
-        # breakpoint()
 
         # 转换为tensor
         input_seq = torch.from_numpy(input_seq).float()
@@ -225,7 +235,7 @@ class SequenceDataset(Dataset):
         if not os.path.exists(mode_dir):
             raise FileNotFoundError(f"模式目录不存在: {mode_dir}")
 
-        # 获取参与者目录
+        # 获取参与者目录（排除隐藏文件和无关文件）
         participants = []
         for item in os.listdir(mode_dir):
             item_path = os.path.join(mode_dir, item)
@@ -242,6 +252,7 @@ class SequenceDataset(Dataset):
         for participant in participants:
             participant_dir = os.path.join(mode_dir, participant)
 
+            # 获取参与者的所有试验
             for trial_item in os.listdir(participant_dir):
                 trial_path = os.path.join(participant_dir, trial_item)
                 if os.path.isdir(trial_path) and not trial_item.startswith('.'):
@@ -312,6 +323,46 @@ class SequenceDataset(Dataset):
             self.all_label_data.append(label_data.numpy())
 
         print("所有数据预加载完成!")
+
+    def _remove_invalid_label_sequences(self):
+        """
+        检测并移除标签全为NaN的序列
+        同时更新trial_names、all_input_data和all_label_data
+        """
+        if not self.remove_nan:
+            return
+
+        print("检测标签全为NaN的序列...")
+
+        valid_indices = []
+        removed_trials = []
+
+        for idx in range(len(self.trial_names)):
+            label_data = self.all_label_data[idx]
+
+            # 检查标签数据是否全为NaN
+            is_all_nan = np.all(np.isnan(label_data))
+
+            if is_all_nan:
+                removed_trials.append(self.trial_names[idx])
+                self.nan_removal_stats['trials_with_all_nan_labels'] += 1
+            else:
+                valid_indices.append(idx)
+
+        # 如果有需要移除的试验
+        if removed_trials:
+            print(f"  发现 {len(removed_trials)} 个标签全为NaN的试验，正在移除...")
+            for trial_name in removed_trials:
+                print(f"    - {trial_name}")
+
+            # 更新所有相关列表
+            self.trial_names = [self.trial_names[i] for i in valid_indices]
+            self.all_input_data = [self.all_input_data[i] for i in valid_indices]
+            self.all_label_data = [self.all_label_data[i] for i in valid_indices]
+
+            print(f"  移除完成，剩余 {len(self.trial_names)} 个有效试验")
+        else:
+            print("  未发现标签全为NaN的序列")
 
     def _load_trial_data(self, trial_name: str) -> Tuple[torch.Tensor, torch.Tensor]:
         '''
@@ -470,3 +521,12 @@ class SequenceDataset(Dataset):
         for trial_idx, _ in self.sequences:
             counts[trial_idx] += 1
         return counts
+
+    def print_nan_removal_summary(self):
+        """打印NaN移除统计摘要"""
+        stats = self.nan_removal_stats
+        print(f"\n{'=' * 60}")
+        print(f"NaN移除统计摘要 - {self.mode.upper()} 数据集")
+        print(f"{'=' * 60}")
+        print(f"标签全为NaN的试验数: {stats['trials_with_all_nan_labels']}")
+        print(f"{'=' * 60}\n")

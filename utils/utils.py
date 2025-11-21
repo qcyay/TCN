@@ -93,11 +93,11 @@ def setup_device(device_str: str) -> torch.device:
             - 'cpu': 使用CPU
             - 'cuda': 使用默认GPU (GPU 0)
             - '0', '1', '2', '3', ...: 直接指定GPU编号
-            - 'cuda:0', 'cuda:1', ...: 也支持这种格式
 
     返回:
         torch.device: 验证后的设备对象
     """
+
     # 显示可用的GPU信息
     if torch.cuda.is_available():
         num_gpus = torch.cuda.device_count()
@@ -105,8 +105,6 @@ def setup_device(device_str: str) -> torch.device:
         for i in range(num_gpus):
             props = torch.cuda.get_device_properties(i)
             print(f"  GPU {i}: {props.name} ({props.total_memory / 1024 ** 3:.1f} GB)")
-    else:
-        print("\n未检测到可用的GPU")
 
     # 解析设备字符串
     device_str = device_str.lower().strip()
@@ -116,10 +114,14 @@ def setup_device(device_str: str) -> torch.device:
         return torch.device("cpu")
 
     # 处理纯数字（如 '0', '1', '2', '3'）
-    if device_str.isdigit():
+    if device_str.isdigit() or device_str.startswith("cuda"):
         if not torch.cuda.is_available():
             print(f"警告: CUDA不可用，回退到CPU")
             return torch.device("cpu")
+
+        # 解析GPU编号
+        if device_str == "cuda":
+            gpu_id = 0
 
         gpu_id = int(device_str)
         num_gpus = torch.cuda.device_count()
@@ -135,41 +137,6 @@ def setup_device(device_str: str) -> torch.device:
         torch.cuda.set_device(gpu_id)
 
         return device
-
-    # 处理 cuda 相关设备
-    if device_str.startswith("cuda"):
-        if not torch.cuda.is_available():
-            print(f"警告: CUDA不可用，回退到CPU")
-            return torch.device("cpu")
-
-        # 解析GPU编号
-        if device_str == "cuda":
-            gpu_id = 0
-        else:
-            try:
-                # 提取 cuda:X 中的 X
-                gpu_id = int(device_str.split(':')[1])
-            except (IndexError, ValueError):
-                print(f"警告: 无效的设备字符串 '{device_str}'，使用 GPU 0")
-                gpu_id = 0
-
-        # 验证GPU编号
-        num_gpus = torch.cuda.device_count()
-        if gpu_id >= num_gpus or gpu_id < 0:
-            print(f"警告: GPU {gpu_id} 不存在（可用GPU: 0-{num_gpus - 1}），使用 GPU 0")
-            gpu_id = 0
-
-        device = torch.device(f"cuda:{gpu_id}")
-        print(f"\n使用设备: GPU {gpu_id} - {torch.cuda.get_device_properties(gpu_id).name}")
-
-        # 设置当前设备
-        torch.cuda.set_device(gpu_id)
-
-        return device
-
-    # 未知设备类型
-    print(f"警告: 未知的设备类型 '{device_str}'，使用CPU")
-    return torch.device("cpu")
 
 def set_seed(seed):
     """设置随机种子以保证可复现性"""
@@ -251,9 +218,7 @@ def copy_config_file(config_path: str, save_dir: str):
 
     支持的路径格式:
     - configs.TCN.default_config.py -> configs/TCN/default_config.py
-    - configs.TCN.default_config -> configs/TCN/default_config.py
     - configs/TCN/default_config.py -> configs/TCN/default_config.py
-    - configs/TCN/default_config -> configs/TCN/default_config.py
     """
     possible_paths = []
 
@@ -271,21 +236,6 @@ def copy_config_file(config_path: str, save_dir: str):
         # 情况3: 如果包含点，尝试将.py前的最后一个点替换为/
         if "." in path_without_py:
             parts = path_without_py.split(".")
-            possible_paths.append(os.path.join(*parts) + ".py")
-    else:
-        # 没有.py后缀的情况
-        # configs.TCN.default_config 或 configs/TCN/default_config
-
-        # 情况1: 点分隔格式 -> 路径格式
-        possible_paths.append(config_path.replace(".", os.sep) + ".py")
-        possible_paths.append(config_path.replace(".", "/") + ".py")
-
-        # 情况2: 已经是路径格式
-        possible_paths.append(config_path + ".py")
-
-        # 情况3: 混合格式处理
-        if "." in config_path:
-            parts = config_path.split(".")
             possible_paths.append(os.path.join(*parts) + ".py")
 
     # 去重
@@ -381,98 +331,128 @@ def reconstruct_sequences(
     return reconstructed_estimates, reconstructed_labels
 
 
-def reconstruct_sequences_from_predictions(
-        all_estimates: torch.Tensor,
-        all_labels: torch.Tensor,
-        trial_info: List[Tuple[int, int, int]],
-        method: str = "only_first"
-) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
+def compute_metrics_on_sequences(
+        estimates_list: List[torch.Tensor],
+        labels_list: List[torch.Tensor],
+        num_outputs: int
+) -> Dict:
     """
-    将短序列预测重组回完整序列
+    在完整序列上计算指标
 
     参数:
-        all_estimates: [N, num_outputs, output_seq_len] 所有短序列的预测
-        all_labels: [N, num_outputs, output_seq_len] 所有短序列的标签
-        trial_info: List[(trial_idx, input_start_idx, seq_len)] 每个短序列的信息
-        method: 重组方法 'only_first' 或 'average'
+        estimates_list: List[Tensor[num_outputs, seq_len]] 每个trial的预测序列
+        labels_list: List[Tensor[num_outputs, seq_len]] 每个trial的标签序列
+        num_outputs: 输出通道数
 
     返回:
-        reconstructed_estimates: List[Tensor[num_outputs, trial_len]] 每个trial的完整序列预测
-        reconstructed_labels: List[Tensor[num_outputs, trial_len]] 每个trial的完整序列标签
+        metrics: 包含每个输出通道指标的字典
     """
-    # 按trial分组
-    trial_groups = {}
-    for idx, (trial_idx, input_start_idx, seq_len) in enumerate(trial_info):
-        if trial_idx not in trial_groups:
-            trial_groups[trial_idx] = []
-        trial_groups[trial_idx].append((input_start_idx, idx, seq_len))
+    metrics = {}
 
-    reconstructed_estimates = []
-    reconstructed_labels = []
+    for j in range(num_outputs):
+        rmse_sum = 0.0
+        r2_sum = 0.0
+        mae_percent_sum = 0.0
+        count = 0
 
-    for trial_idx in sorted(trial_groups.keys()):
-        group = sorted(trial_groups[trial_idx], key=lambda x: x[0])  # 按input_start_idx排序
+        for est_seq, lbl_seq in zip(estimates_list, labels_list):
+            est = est_seq[j]  # [seq_len]
+            lbl = lbl_seq[j]  # [seq_len]
 
-        # 确定完整序列长度
-        max_end_pos = max(start_idx + seq_len for start_idx, _, seq_len in group)
-        num_outputs = all_estimates.size(1)
-        output_seq_len = all_estimates.size(2)
+            # 创建有效数据掩码
+            valid_mask = ~torch.isnan(est) & ~torch.isnan(lbl)
 
-        if method == "only_first":
-            # 只使用每个短序列的第一个预测值
-            trial_estimate = torch.full((num_outputs, max_end_pos), float('nan'), device=all_estimates.device)
-            trial_label = torch.full((num_outputs, max_end_pos), float('nan'), device=all_labels.device)
+            if valid_mask.sum() == 0:
+                continue
 
-            for start_idx, pred_idx, seq_len in group:
-                # 只取第一个预测值
-                end_pos = start_idx + seq_len
-                trial_estimate[:, end_pos:end_pos + 1] = all_estimates[pred_idx, :, 0:1]
-                trial_label[:, end_pos:end_pos + 1] = all_labels[pred_idx, :, 0:1]
+            est_valid = est[valid_mask]
+            lbl_valid = lbl[valid_mask]
 
-        elif method == "average":
-            # 对每个位置的所有预测值取平均
-            # 使用累加和计数来实现平均
-            trial_estimate_sum = torch.zeros((num_outputs, max_end_pos), device=all_estimates.device)
-            trial_estimate_count = torch.zeros((num_outputs, max_end_pos), device=all_estimates.device)
-            trial_label_sum = torch.zeros((num_outputs, max_end_pos), device=all_labels.device)
-            trial_label_count = torch.zeros((num_outputs, max_end_pos), device=all_labels.device)
+            # RMSE
+            rmse = torch.sqrt(torch.mean((est_valid - lbl_valid) ** 2))
 
-            for start_idx, pred_idx, seq_len in group:
-                pred = all_estimates[pred_idx]  # [num_outputs, output_seq_len]
-                lbl = all_labels[pred_idx]  # [num_outputs, output_seq_len]
+            # R²
+            ss_res = torch.sum((lbl_valid - est_valid) ** 2)
+            ss_tot = torch.sum((lbl_valid - torch.mean(lbl_valid)) ** 2)
+            r2 = 1 - (ss_res / (ss_tot + 1e-8))
 
-                end_pos = start_idx + seq_len
-                # 将预测值添加到对应位置
-                for i in range(min(output_seq_len, max_end_pos - end_pos)):
-                    pos = end_pos + i
-                    # 只累加非NaN值
-                    valid_mask = ~torch.isnan(pred[:, i])
-                    trial_estimate_sum[valid_mask, pos] += pred[valid_mask, i]
-                    trial_estimate_count[valid_mask, pos] += 1
+            # MAE as percentage
+            label_range = torch.max(lbl_valid) - torch.min(lbl_valid)
+            mae = torch.mean(torch.abs(est_valid - lbl_valid))
+            mae_percent = (mae / (label_range + 1e-8)) * 100.0
 
-                    valid_mask = ~torch.isnan(lbl[:, i])
-                    trial_label_sum[valid_mask, pos] += lbl[valid_mask, i]
-                    trial_label_count[valid_mask, pos] += 1
+            rmse_sum += rmse.item()
+            r2_sum += r2.item()
+            mae_percent_sum += mae_percent.item()
+            count += 1
 
-            # 计算平均
-            trial_estimate = torch.where(
-                trial_estimate_count > 0,
-                trial_estimate_sum / trial_estimate_count,
-                torch.full_like(trial_estimate_sum, float('nan'))
-            )
-            trial_label = torch.where(
-                trial_label_count > 0,
-                trial_label_sum / trial_label_count,
-                torch.full_like(trial_label_sum, float('nan'))
-            )
-
+        if count > 0:
+            metrics[f"output_{j}"] = {
+                "rmse": rmse_sum / count,
+                "r2": r2_sum / count,
+                "mae_percent": mae_percent_sum / count,
+                "count": count
+            }
         else:
-            raise ValueError(f"未知的重组方法: {method}")
+            metrics[f"output_{j}"] = {
+                "rmse": 0.0,
+                "r2": 0.0,
+                "mae_percent": 0.0,
+                "count": 0
+            }
 
-        reconstructed_estimates.append(trial_estimate)
-        reconstructed_labels.append(trial_label)
+    return metrics
 
-    return reconstructed_estimates, reconstructed_labels
+
+def compute_metrics_tcn_trial(estimates: torch.Tensor,
+                              labels: torch.Tensor,
+                              valid_mask: torch.Tensor,
+                              num_outputs: int) -> dict:
+    """
+    TCN模型的指标计算（针对单个长序列试验）
+
+    策略：所有指标在整个长序列上计算
+    """
+    metrics = {}
+
+    for j in range(num_outputs):
+        est = estimates[j]
+        lbl = labels[j]
+        mask = valid_mask[j]
+
+        if mask.sum() == 0:
+            metrics[f"output_{j}"] = {
+                "rmse": 0.0,
+                "r2": 0.0,
+                "mae_percent": 0.0,
+                "count": 0
+            }
+            continue
+
+        est_valid = est[mask]
+        lbl_valid = lbl[mask]
+
+        # RMSE
+        rmse = torch.sqrt(torch.mean((est_valid - lbl_valid) ** 2))
+
+        # R²
+        ss_res = torch.sum((lbl_valid - est_valid) ** 2)
+        ss_tot = torch.sum((lbl_valid - torch.mean(lbl_valid)) ** 2)
+        r2 = 1 - (ss_res / (ss_tot + 1e-8))
+
+        # MAE as percentage
+        label_range = torch.max(lbl_valid) - torch.min(lbl_valid)
+        mae = torch.mean(torch.abs(est_valid - lbl_valid))
+        mae_percent = (mae / (label_range + 1e-8)) * 100.0
+
+        metrics[f"output_{j}"] = {
+            "rmse": rmse.item(),
+            "r2": r2.item(),
+            "mae_percent": mae_percent.item(),
+            "count": 1
+        }
+
+    return metrics
 
 if __name__ == '__main__':
 
