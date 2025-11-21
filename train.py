@@ -1,6 +1,7 @@
 import argparse
 import os
 import shutil
+from cgitb import enable
 from typing import List, Tuple, Dict
 import torch
 import torch.nn as nn
@@ -237,6 +238,7 @@ def save_model(model: nn.Module, save_dir: str, epoch: int, config,
                optimizer: optim.Optimizer = None,
                scheduler: ReduceLROnPlateau = None):
     """保存模型检查点"""
+
     checkpoint = {
         "state_dict": model.state_dict(),
         "epoch": epoch,
@@ -247,39 +249,10 @@ def save_model(model: nn.Module, save_dir: str, epoch: int, config,
         "scale": config.scale
     }
 
-    if config.model_type == 'GenerativeTransformer':
-        checkpoint.update({
-            "d_model": config.gen_d_model,
-            "nhead": config.gen_nhead,
-            "num_encoder_layers": config.gen_num_encoder_layers,
-            "num_decoder_layers": config.gen_num_decoder_layers,
-            "dim_feedforward": config.gen_dim_feedforward,
-            "dropout": config.gen_dropout,
-            "sequence_length": config.gen_sequence_length,
-            "encoder_type": config.encoder_type,
-            "use_positional_encoding": config.use_positional_encoding
-        })
-    elif config.model_type == 'Transformer':
-        checkpoint.update({
-            "d_model": config.d_model,
-            "nhead": config.nhead,
-            "num_encoder_layers": config.num_encoder_layers,
-            "dim_feedforward": config.dim_feedforward,
-            "dropout": config.transformer_dropout,
-            "sequence_length": config.sequence_length,
-            "output_sequence_length":config.output_sequence_length,
-            "use_positional_encoding": config.use_positional_encoding
-        })
-    else:  # TCN
-        checkpoint.update({
-            "num_channels": config.num_channels,
-            "ksize": config.ksize,
-            "dropout": config.dropout,
-            "eff_hist": config.eff_hist,
-            "spatial_dropout": config.spatial_dropout,
-            "activation": config.activation,
-            "norm": config.norm
-        })
+    # 利用MODEL_SPECIFIC_FIELDS动态添加模型特定参数
+    model_fields = MODEL_SPECIFIC_FIELDS.get(config.model_type, {})
+    for checkpoint_key, config_attr in model_fields.items():
+        checkpoint[checkpoint_key] = getattr(config, config_attr)
 
     if optimizer is not None:
         checkpoint["optimizer_state"] = optimizer.state_dict()
@@ -295,38 +268,6 @@ def log_to_file(file_path: str, content: str):
     """将内容追加到日志文件"""
     with open(file_path, "a", encoding="utf-8") as f:
         f.write(content + "\n")
-
-
-class EarlyStopping:
-    """早停机制"""
-
-    def __init__(self, patience: int = 10, min_delta: float = 0.0, mode: str = 'min'):
-        self.patience = patience
-        self.min_delta = min_delta
-        self.mode = mode
-        self.counter = 0
-        self.best_value = None
-        self.early_stop = False
-
-    def __call__(self, current_value: float) -> bool:
-        if self.best_value is None:
-            self.best_value = current_value
-            return False
-
-        if self.mode == 'min':
-            improved = current_value < (self.best_value - self.min_delta)
-        else:
-            improved = current_value > (self.best_value + self.min_delta)
-
-        if improved:
-            self.best_value = current_value
-            self.counter = 0
-        else:
-            self.counter += 1
-            if self.counter >= self.patience:
-                self.early_stop = True
-                return True
-        return False
 
 
 def main():
@@ -372,42 +313,18 @@ def main():
         output_seq_len = getattr(config, 'output_sequence_length', seq_len)
 
         print(f"\n加载{config.model_type}训练数据集...")
-        train_dataset = SequenceDataset(
-            data_dir=config.data_dir,
-            input_names=input_names,
-            label_names=label_names,
-            side=config.side,
-            sequence_length=seq_len,
-            output_sequence_length=output_seq_len,
-            model_delays=config.model_delays,
-            participant_masses=config.participant_masses,
-            device=device,
-            mode='train',
-            model_type=config.model_type,
-            start_token_value=config.start_token_value if config.model_type == "GenerativeTransformer" else 0.0,
-            remove_nan=True,
-            action_patterns=getattr(config, 'action_patterns', None),
-            enable_action_filter=getattr(config, 'enable_action_filter', False)
-        )
+
+        sequence_kwargs = dict(data_dir=config.data_dir, input_names=input_names, label_names=label_names, side=config.side,
+                               sequence_length=seq_len, output_sequence_length=output_seq_len, model_delays=config.model_delays,
+                               participant_masses=config.participant_masses, device=device, mode_type=config.mode_type,
+                               start_token_value=config.start_token_value if config.model_type == "GenerativeTransformer" else 0.0,
+                               remove_nan=True, action_patterns=getattr(config, 'action_patterns', None),
+                               enable_action_filter=getattr(config, 'enable_action_filter', False))
+
+        train_dataset = SequenceDataset(mode='train', **sequence_kwargs)
 
         print(f"\n加载{config.model_type}测试数据集...")
-        test_dataset = SequenceDataset(
-            data_dir=config.data_dir,
-            input_names=input_names,
-            label_names=label_names,
-            side=config.side,
-            sequence_length=seq_len,
-            output_sequence_length=output_seq_len,
-            model_delays=config.model_delays,
-            participant_masses=config.participant_masses,
-            device=device,
-            mode='test',
-            model_type=config.model_type,
-            start_token_value=config.start_token_value if config.model_type == "GenerativeTransformer" else 0.0,
-            remove_nan=True,
-            action_patterns=getattr(config, 'action_patterns', None),
-            enable_action_filter=getattr(config, 'enable_action_filter', False)
-        )
+        test_dataset = SequenceDataset(mode='test', **sequence_kwargs)
 
         collate_fn = collate_fn_generative if config.model_type == "GenerativeTransformer" else collate_fn_predictor
 
@@ -420,10 +337,9 @@ def main():
             pin_memory=True if device.type == 'cuda' else False
         )
 
-        test_batch_size = getattr(config, 'test_batch_size', config.batch_size)
         test_loader = DataLoader(
             test_dataset,
-            batch_size=test_batch_size,
+            batch_size=config.test_batch_size,
             shuffle=False,
             collate_fn=collate_fn,
             num_workers=args.num_workers,
@@ -432,32 +348,15 @@ def main():
 
     else:  # TCN
         print(f"\n加载TCN训练数据集...")
-        train_dataset = TcnDataset(
-            data_dir=config.data_dir,
-            input_names=input_names,
-            label_names=label_names,
-            side=config.side,
-            participant_masses=config.participant_masses,
-            device=device,
-            mode='train',
-            load_to_device=False,
-            action_patterns=getattr(config, 'action_patterns', None),
-            enable_action_filter=getattr(config, 'enable_action_filter', False)
-        )
+
+        tcn_kwargs = dict(data_dir=config.data_dir, input_names=input_names, label_names=label_names, side=config.side,
+                          participant_masses=config.participant_masses, device=device, load_to_device=False,
+                          action_patterns=getattr(config, 'action_patterns', None), enable_action_filter=getattr(config, 'enable_action_filter', False))
+
+        train_dataset = TcnDataset(mode='train', **tcn_kwargs)
 
         print(f"\n加载TCN测试数据集...")
-        test_dataset = TcnDataset(
-            data_dir=config.data_dir,
-            input_names=input_names,
-            label_names=label_names,
-            side=config.side,
-            participant_masses=config.participant_masses,
-            device=device,
-            mode='test',
-            load_to_device=False,
-            action_patterns=getattr(config, 'action_patterns', None),
-            enable_action_filter=getattr(config, 'enable_action_filter', False)
-        )
+        test_dataset = TcnDataset(mode='test', **tcn_kwargs)
 
         train_loader = DataLoader(
             train_dataset,
@@ -467,10 +366,9 @@ def main():
             num_workers=args.num_workers
         )
 
-        test_batch_size = getattr(config, 'test_batch_size', config.batch_size)
         test_loader = DataLoader(
             test_dataset,
-            batch_size=test_batch_size,
+            batch_size=config.test_batch_size,
             shuffle=False,
             collate_fn=collate_fn_tcn,
             num_workers=args.num_workers
@@ -522,9 +420,7 @@ def main():
         config.model_type, config, reconstruction_method
     )
 
-    initial_log_content = f"\n{'=' * 60}\n"
     initial_log_content += "=== 训练前初始验证结果 (Epoch 0) ===\n"
-    initial_log_content += f"{'=' * 60}\n"
     initial_log_content += f"验证损失: {initial_loss:.6f}\n"
     print(f"\n验证损失: {initial_loss:.6f}")
 
@@ -532,8 +428,7 @@ def main():
         result_str = (f"\n{label_name}:\n"
                       f"  RMSE: {metrics['rmse']:.4f} Nm/kg\n"
                       f"  R²: {metrics['r2']:.4f}\n"
-                      f"  MAE: {metrics['mae_percent']:.2f}%\n"
-                      f"  VALID COUNT: {metrics['count']}")
+                      f"  MAE: {metrics['mae_percent']:.2f}%\n")
         print(result_str)
         initial_log_content += result_str + "\n"
 
@@ -601,7 +496,6 @@ def main():
 
                 valid_mask = ~torch.isnan(estimates) & ~torch.isnan(label_data)
                 if valid_mask.sum() > 0:
-                    # breakpoint()
                     loss = criterion(estimates[valid_mask], label_data[valid_mask])
 
                     optimizer.zero_grad()
@@ -756,8 +650,7 @@ def main():
             result_str = (f"\n{label_name}:\n"
                           f"  RMSE: {metrics['rmse']:.4f} Nm/kg\n"
                           f"  R²: {metrics['r2']:.4f}\n"
-                          f"  MAE: {metrics['mae_percent']:.2f}%\n"
-                          f"  VALID COUNT: {metrics['count']}")
+                          f"  MAE: {metrics['mae_percent']:.2f}%\n")
             print(result_str)
             best_log_content += result_str + "\n"
 

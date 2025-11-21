@@ -31,6 +31,72 @@ CONFIG_ALIAS = {
     },
 }
 
+MODEL_SPECIFIC_FIELDS: Dict[str, Dict[str, str]] = {
+    # checkpoint_key : config中对应的属性名
+    "GenerativeTransformer": {
+        "d_model": "gen_d_model",
+        "nhead": "gen_nhead",
+        "num_encoder_layers": "gen_num_encoder_layers",
+        "num_decoder_layers": "gen_num_decoder_layers",
+        "dim_feedforward": "gen_dim_feedforward",
+        "dropout": "gen_dropout",
+        "sequence_length": "gen_sequence_length",
+        "encoder_type": "encoder_type",
+        "use_positional_encoding": "use_positional_encoding",
+    },
+    "Transformer": {
+        "d_model": "d_model",
+        "nhead": "nhead",
+        "num_encoder_layers": "num_encoder_layers",
+        "dim_feedforward": "dim_feedforward",
+        "dropout": "transformer_dropout",
+        "sequence_length": "sequence_length",
+        "output_sequence_length": "output_sequence_length",
+        "use_positional_encoding": "use_positional_encoding",
+    },
+    # 默认当作 TCN
+    "TCN": {
+        "num_channels": "num_channels",
+        "ksize": "ksize",
+        "dropout": "dropout",
+        "eff_hist": "eff_hist",
+        "spatial_dropout": "spatial_dropout",
+        "activation": "activation",
+        "norm": "norm",
+    },
+}
+
+class EarlyStopping:
+    """早停机制"""
+
+    def __init__(self, patience: int = 10, min_delta: float = 0.0, mode: str = 'min'):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.mode = mode
+        self.counter = 0
+        self.best_value = None
+        self.early_stop = False
+
+    def __call__(self, current_value: float) -> bool:
+        if self.best_value is None:
+            self.best_value = current_value
+            return False
+
+        if self.mode == 'min':
+            improved = current_value < (self.best_value - self.min_delta)
+        else:
+            improved = current_value > (self.best_value + self.min_delta)
+
+        if improved:
+            self.best_value = current_value
+            self.counter = 0
+        else:
+            self.counter += 1
+            if self.counter >= self.patience:
+                self.early_stop = True
+                return True
+        return False
+
 def create_model_from_config(model_type, checkpoint=None, config=None, device=None):
     """
     根据 model_type + config (+ 可选 checkpoint) 创建模型。
@@ -330,6 +396,46 @@ def reconstruct_sequences(
 
     return reconstructed_estimates, reconstructed_labels
 
+def categorize_trial(trial_name: str, action_to_category: Dict[str, str]) -> str:
+    """
+    根据trial名称判断所属类别
+
+    参数:
+        trial_name: 试验名称，格式为 "参与者/运动类型"
+        action_to_category: 运动类型到类别的映射字典
+
+    返回:
+        类别名称，如果未匹配返回 "Unknown"
+    """
+    # 提取运动类型部分
+    action_name = trial_name.split("/")[-1].split("\\")[-1]
+
+    # 尝试匹配每个正则表达式
+    for pattern, category in action_to_category.items():
+        if re.match(pattern, action_name):
+            return category
+
+    return "Unknown"
+
+
+def check_unseen_task(trial_name: str, unseen_patterns: List[str]) -> bool:
+    """
+    判断trial是否属于未见过的任务
+
+    参数:
+        trial_name: 试验名称
+        unseen_patterns: 未见过任务的正则表达式列表
+
+    返回:
+        True如果属于未见过的任务，否则False
+    """
+    action_name = trial_name.split("/")[-1].split("\\")[-1]
+
+    for pattern in unseen_patterns:
+        if re.match(pattern, action_name):
+            return True
+
+    return False
 
 def compute_metrics_on_sequences(
         estimates_list: List[torch.Tensor],
@@ -403,7 +509,6 @@ def compute_metrics_on_sequences(
 
     return metrics
 
-
 def compute_metrics_tcn_trial(estimates: torch.Tensor,
                               labels: torch.Tensor,
                               valid_mask: torch.Tensor,
@@ -453,6 +558,105 @@ def compute_metrics_tcn_trial(estimates: torch.Tensor,
         }
 
     return metrics
+
+def compute_metrics_per_sequence(
+        estimates: torch.Tensor,
+        labels: torch.Tensor
+) -> Dict[str, float]:
+    """
+    计算单个序列的指标
+
+    参数:
+        estimates: [num_outputs, seq_len]
+        labels: [num_outputs, seq_len]
+
+    返回:
+        metrics: 包含rmse, r2, mae_percent的字典
+    """
+    # 创建有效数据掩码
+    valid_mask = ~torch.isnan(estimates) & ~torch.isnan(labels)
+
+    if valid_mask.sum() == 0:
+        return None
+
+    est_valid = estimates[valid_mask]
+    lbl_valid = labels[valid_mask]
+
+    # RMSE
+    rmse = torch.sqrt(torch.mean((est_valid - lbl_valid) ** 2)).item()
+
+    # R²
+    ss_res = torch.sum((lbl_valid - est_valid) ** 2)
+    ss_tot = torch.sum((lbl_valid - torch.mean(lbl_valid)) ** 2)
+    r2 = (1 - (ss_res / (ss_tot + 1e-8))).item()
+
+    # Normalized MAE
+    label_range = torch.max(lbl_valid) - torch.min(lbl_valid)
+    mae = torch.mean(torch.abs(est_valid - lbl_valid))
+    mae_percent = ((mae / (label_range + 1e-8)) * 100.0).item()
+
+    return {'rmse': rmse, 'r2': r2, 'mae_percent': mae_percent}
+
+def compute_category_metrics(
+        estimates_list: List[torch.Tensor],
+        labels_list: List[torch.Tensor],
+        trial_names: List[str],
+        label_names: List[str],
+        action_to_category: Dict[str, str],
+        unseen_patterns: List[str]
+) -> Dict:
+    """
+    计算各类别的指标
+
+    参数:
+        estimates_list: List[Tensor[num_outputs, seq_len]] 每个trial的预测序列
+        labels_list: List[Tensor[num_outputs, seq_len]] 每个trial的标签序列
+        trial_names: 试验名称列表
+        label_names: 标签名称列表
+        action_to_category: 运动类型到类别的映射
+        unseen_patterns: 未见过任务的正则表达式列表
+
+    返回:
+        category_metrics: 嵌套字典 {category: {label_name: {metric: [values]}}}
+    """
+    num_outputs = len(label_names)
+
+    # 初始化存储结构
+    # category_metrics[category][label_name][metric] = [value1, value2, ...]
+    category_metrics = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
+
+    for est_seq, lbl_seq, trial_name in zip(estimates_list, labels_list, trial_names):
+        # 判断类别
+        category = categorize_trial(trial_name, action_to_category)
+
+        # 判断是否为未见过的任务
+        is_unseen = check_unseen_task(trial_name, unseen_patterns)
+
+        # 对每个输出通道计算指标
+        for j, label_name in enumerate(label_names):
+            est = est_seq[j]  # [seq_len]
+            lbl = lbl_seq[j]  # [seq_len]
+
+            metrics = compute_metrics_per_sequence(est, lbl)
+
+            if metrics is not None:
+                # 添加到对应类别
+                category_metrics[category][label_name]['rmse'].append(metrics['rmse'])
+                category_metrics[category][label_name]['r2'].append(metrics['r2'])
+                category_metrics[category][label_name]['mae_percent'].append(metrics['mae_percent'])
+
+                # 添加到"所有"类别
+                category_metrics['All'][label_name]['rmse'].append(metrics['rmse'])
+                category_metrics['All'][label_name]['r2'].append(metrics['r2'])
+                category_metrics['All'][label_name]['mae_percent'].append(metrics['mae_percent'])
+
+                # 如果是未见过的任务，额外添加到Unseen类别
+                if is_unseen:
+                    category_metrics['Unseen'][label_name]['rmse'].append(metrics['rmse'])
+                    category_metrics['Unseen'][label_name]['r2'].append(metrics['r2'])
+                    category_metrics['Unseen'][label_name]['mae_percent'].append(metrics['mae_percent'])
+
+    return category_metrics
 
 if __name__ == '__main__':
 

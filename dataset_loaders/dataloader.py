@@ -90,8 +90,11 @@ class TcnDataset(Dataset):
         self.trial_lengths = []  # 存储每个试验的原始长度
         self._preload_all_data()
 
-        # === 检测并移除标签全为NaN的序列 ===
-        self._remove_invalid_label_sequences()
+        # # === 检测并移除标签全为NaN的序列 ===
+        # self._remove_invalid_label_sequences()
+
+        # 检测并移除包含NaN的标签序列
+        self._remove_label_sequences_with_any_nan
 
         print(f"数据集初始化完成 - 模式: {self.mode}, 试验数量: {len(self.trial_names)}")
         if self.remove_nan:
@@ -369,6 +372,56 @@ class TcnDataset(Dataset):
             print(f"  移除完成，剩余 {len(self.trial_names)} 个有效试验")
         else:
             print("  未发现标签全为NaN的序列")
+
+    def _remove_label_sequences_with_any_nan(self):
+        """
+        检测并移除【标签中含有 NaN】的序列
+        只要标签中出现 NaN，就移除对应 trial
+        同时更新 trial_names、all_input_data、all_label_data 和 trial_lengths
+        """
+        if not self.remove_nan:
+            return
+
+        print("检测标签中含有 NaN 的序列...")
+
+        valid_indices = []
+        removed_trials = []
+
+        # 如果你有统计信息，可以先确保这个 key 存在
+        if hasattr(self, "nan_removal_stats"):
+            self.nan_removal_stats.setdefault('trials_with_any_nan_labels', 0)
+
+        for idx in range(len(self.trial_names)):
+            label_data = self.all_label_data[idx]
+
+            # 检查标签数据是否“包含 NaN”
+            if isinstance(label_data, np.ndarray):
+                has_nan = np.any(np.isnan(label_data))
+            else:  # torch.Tensor
+                has_nan = torch.isnan(label_data).any().item()
+
+            if has_nan:
+                removed_trials.append(self.trial_names[idx])
+                if hasattr(self, "nan_removal_stats"):
+                    self.nan_removal_stats['trials_with_any_nan_labels'] += 1
+            else:
+                valid_indices.append(idx)
+
+        # 如果有需要移除的试验
+        if removed_trials:
+            print(f"  发现 {len(removed_trials)} 个标签中含有 NaN 的试验，正在移除...")
+            for trial_name in removed_trials:
+                print(f"    - {trial_name}")
+
+            # 更新所有相关列表
+            self.trial_names = [self.trial_names[i] for i in valid_indices]
+            self.all_input_data = [self.all_input_data[i] for i in valid_indices]
+            self.all_label_data = [self.all_label_data[i] for i in valid_indices]
+            self.trial_lengths = [self.trial_lengths[i] for i in valid_indices]
+
+            print(f"  移除完成，剩余 {len(self.trial_names)} 个有效试验")
+        else:
+            print("  未发现标签中含有 NaN 的序列")
 
     def _load_trial_data(self, trial_name: str) -> Tuple[torch.Tensor, torch.Tensor]:
         '''
