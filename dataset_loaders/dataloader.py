@@ -1,11 +1,12 @@
+import sys
 import os
 import re
+import argparse
 from typing import List, Dict, Optional, Tuple
 import pandas as pd
 import torch
 from torch.utils.data import Dataset
 import numpy as np
-
 
 class TcnDataset(Dataset):
     '''
@@ -23,9 +24,9 @@ class TcnDataset(Dataset):
                  mode: str = "train",
                  file_suffix: Dict[str, str] = None,
                  remove_nan: bool = True,
-                 load_to_device: bool = False,
                  action_patterns: Optional[List[str]] = None,
-                 enable_action_filter: bool = False):
+                 enable_action_filter: bool = False,
+                 activity_flag: bool = False):
         """
         初始化数据集，支持训练/测试模式和新文件结构
         在初始化时预加载所有数据到内存
@@ -40,9 +41,9 @@ class TcnDataset(Dataset):
             mode: 数据集模式，'train' 或 'test'
             file_suffix: 文件后缀映射字典，默认为 None 时使用预设值
             remove_nan: 是否自动检测并移除包含NaN的行（默认True）
-            load_to_device: 是否在初始化时直接加载到device（False时存储为numpy数组）
             action_patterns: 运动类型筛选的正则表达式列表
             enable_action_filter: 是否启用action_patterns筛选
+            activity_flag: 是否启用activity_flag掩码功能（默认False）
         """
         self.data_dir = data_dir
         self.input_names = input_names
@@ -52,25 +53,23 @@ class TcnDataset(Dataset):
         self.device = device
         self.mode = mode.lower()
         self.remove_nan = remove_nan
-        self.load_to_device = load_to_device
         self.action_patterns = action_patterns
         self.enable_action_filter = enable_action_filter
+        self.activity_flag = activity_flag
 
         # 设置文件后缀映射
         if file_suffix is None:
             self.file_suffix = {
                 "input": "_exo.csv",
-                "label": "_moment_filt.csv"
-            }
+                "label": "_moment_filt.csv",
+                "flag":"_activity_flag.csv"}
         else:
             self.file_suffix = file_suffix
 
-        # 验证模式参数
-        if self.mode not in ["train", "test"]:
-            raise ValueError(f"模式参数必须是 'train' 或 'test'，当前为: {mode}")
-
         # 获取试验名称列表
         self.trial_names = self._get_trial_names()
+        # 测试
+        self.trial_names = self.trial_names[:10]
 
         # 统计信息
         self.nan_removal_stats = {
@@ -88,13 +87,14 @@ class TcnDataset(Dataset):
         self.all_input_data = []  # 存储所有试验的输入数据
         self.all_label_data = []  # 存储所有试验的标签数据
         self.trial_lengths = []  # 存储每个试验的原始长度
+        self.all_activity_mask = []  # 存储所有试验的activity flag掩码
         self._preload_all_data()
 
-        # # === 检测并移除标签全为NaN的序列 ===
-        # self._remove_invalid_label_sequences()
+        # === 检测并移除标签全为NaN的序列 ===
+        self._remove_invalid_label_sequences()
 
-        # 检测并移除包含NaN的标签序列
-        self._remove_label_sequences_with_any_nan
+        # # 检测并移除包含NaN的标签序列
+        # self._remove_label_sequences_with_any_nan()
 
         print(f"数据集初始化完成 - 模式: {self.mode}, 试验数量: {len(self.trial_names)}")
         if self.remove_nan:
@@ -104,69 +104,37 @@ class TcnDataset(Dataset):
         '''返回数据集中试验的总数'''
         return len(self.trial_names)
 
-    def __getitem__(self, idx: int or List[int] or slice):
+    def __getitem__(self, idx: int):
         '''
         根据提供的索引获取预加载的数据
         返回格式与原版相同，保持与collate_fn_tcn的兼容性
 
         参数:
-            idx: 整数索引、索引列表或切片对象
+            idx: 整数索引
 
         返回:
             input_data: 输入数据张量 [batch_size, num_input_features, sequence_length]
             label_data: 标签数据张量 [batch_size, num_label_features, sequence_length]
             trial_sequence_lengths: 每个试验的原始长度列表
+            activity_masks: activity flag掩码列表 (如果启用) 或 None
         '''
-        # 根据索引类型处理
-        if isinstance(idx, int):
-            indices = [idx]
-        elif isinstance(idx, slice):
-            indices = list(range(*idx.indices(len(self))))
-        elif isinstance(idx, list):
-            indices = idx
+
+        # 从numpy转换为tensor
+        # 尺寸为[C,N]
+        input_data = torch.from_numpy(self.all_input_data[idx]).float()
+        #尺寸为[N_label,N]
+        label_data = torch.from_numpy(self.all_label_data[idx]).float()
+        if self.activity_flag:
+            #尺寸为[N]
+            activity_mask = torch.from_numpy(self.all_activity_mask[idx]).float()
         else:
-            raise TypeError(f"不支持的索引类型: {type(idx)}")
+            activity_mask = None
 
-        # 从预加载的数据中提取
-        batch_input_data = []
-        batch_label_data = []
-        batch_lengths = []
+        trial_length = [self.trial_lengths[idx]]
 
-        for i in indices:
-            # 直接从预加载的数据中获取
-            if self.load_to_device:
-                # 如果已经加载到device，直接使用
-                input_data = self.all_input_data[i]
-                label_data = self.all_label_data[i]
-            else:
-                # 从numpy转换为tensor
-                input_data = torch.from_numpy(self.all_input_data[i]).float()
-                label_data = torch.from_numpy(self.all_label_data[i]).float()
+        # print(f"加载试验名称: {self.trial_names[i]}， 尺寸为 {input_data.size()}")
 
-            # print(f"加载试验名称: {self.trial_names[i]}， 尺寸为 {input_data.size()}")
-
-            # 添加batch维度 [C, N] -> [1, C, N]
-            input_data = input_data.unsqueeze(0)
-            label_data = label_data.unsqueeze(0)
-
-            batch_input_data.append(input_data)
-            batch_label_data.append(label_data)
-            batch_lengths.append(self.trial_lengths[i])
-
-        # 如果只请求一个样本，进行零填充以保持格式一致
-        if len(batch_input_data) == 1:
-            return batch_input_data[0], batch_label_data[0], batch_lengths
-
-        # 多个样本：进行零填充
-        padded_data, padded_lengths = self._add_zero_padding(
-            list(zip(batch_input_data, batch_label_data))
-        )
-
-        # 拼接张量
-        input_data = torch.cat([d[0] for d in padded_data], dim=0)
-        label_data = torch.cat([d[1] for d in padded_data], dim=0)
-
-        return input_data, label_data, padded_lengths
+        return input_data, label_data, trial_length, activity_mask
 
     def get_trial_names(self):
         '''返回所有试验名称'''
@@ -224,6 +192,7 @@ class TcnDataset(Dataset):
         for item in os.listdir(mode_dir):
             item_path = os.path.join(mode_dir, item)
             if os.path.isdir(item_path) and not item.startswith('.'):
+                # 包含参与者目录的列表
                 participants.append(item)
 
         if not participants:
@@ -245,6 +214,7 @@ class TcnDataset(Dataset):
 
                     # 检查是否匹配action_patterns
                     if self._match_action_patterns(trial_name):
+                        # 包含试验名称的列表
                         trial_names.append(trial_name)
                     else:
                         filtered_out_count += 1
@@ -308,24 +278,22 @@ class TcnDataset(Dataset):
                 print(f"  加载进度: {trial_idx + 1}/{len(self.trial_names)}")
 
             # 加载单个试验数据
-            input_data, label_data = self._load_trial_data(trial_name)
+            input_data, label_data, activity_mask = self._load_trial_data(trial_name)
 
             # 检查数据有效性
             if torch.isnan(input_data).any():
                 print(f"  警告: {trial_name} 包含NaN值")
 
-            # 存储数据
-            if self.load_to_device:
-                # 直接存储为GPU tensor
-                self.all_input_data.append(input_data.to(self.device))
-                self.all_label_data.append(label_data.to(self.device))
-            else:
-                # 存储为numpy数组（更节省内存）
-                self.all_input_data.append(input_data.numpy())
-                self.all_label_data.append(label_data.numpy())
+            # 存储为numpy数组（更节省内存）
+            self.all_input_data.append(input_data.numpy())
+            self.all_label_data.append(label_data.numpy())
+            if activity_mask is not None:
+                self.all_activity_mask.append(activity_mask.numpy())
 
             # 记录原始长度
             self.trial_lengths.append(input_data.shape[1])
+            if input_data.shape[1] == 0:
+                break
 
         print("所有数据预加载完成!")
 
@@ -368,6 +336,7 @@ class TcnDataset(Dataset):
             self.all_input_data = [self.all_input_data[i] for i in valid_indices]
             self.all_label_data = [self.all_label_data[i] for i in valid_indices]
             self.trial_lengths = [self.trial_lengths[i] for i in valid_indices]
+            self.all_activity_mask = [self.all_activity_mask[i] for i in valid_indices]
 
             print(f"  移除完成，剩余 {len(self.trial_names)} 个有效试验")
         else:
@@ -423,7 +392,7 @@ class TcnDataset(Dataset):
         else:
             print("  未发现标签中含有 NaN 的序列")
 
-    def _load_trial_data(self, trial_name: str) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _load_trial_data(self, trial_name: str) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
         '''
         从单个试验目录加载数据，适配新的文件命名格式
         支持自动检测和移除包含NaN的行（包括文件开头和结尾）
@@ -434,6 +403,7 @@ class TcnDataset(Dataset):
         返回:
             input_data: [num_input_features, sequence_length]
             label_data: [num_label_features, sequence_length]
+            activity_mask: [sequence_length] or None
         '''
         # 构建完整的试验目录路径
         trial_dir = os.path.join(self.data_dir, self.mode, trial_name)
@@ -448,8 +418,7 @@ class TcnDataset(Dataset):
             print(f"  警告: 参与者 {participant} 的体重信息未提供")
 
         # 构建新的文件名（基于参与者姓名和试验项目）
-        trial_basename = os.path.basename(trial_name)
-        file_prefix = f"{participant}_{trial_basename}"
+        file_prefix = f"{participant}_{os.path.basename(trial_name)}"
 
         # 构建输入和标签文件路径（新命名格式）
         input_filename = f"{file_prefix}{self.file_suffix['input']}"
@@ -466,20 +435,32 @@ class TcnDataset(Dataset):
             raise FileNotFoundError(f"标签文件不存在: {label_file_path}")
 
         # 加载输入数据
-        input_data, valid_range = self._load_input_data(
-            input_file_path,
-            body_mass=self.participant_masses.get(participant, 1.0)
-        )
+        # input_data,输入传感器数据，尺寸为[num_input_features, sequence_length],valid_range，有效数据范围，[start,end]
+        input_data, valid_range = self._load_input_data(input_file_path,
+                                                        body_mass=self.participant_masses.get(participant, 1.0))
 
         # 加载标签数据（使用相同的有效范围）
+        # label_data,标签数据，尺寸为[num_label_features, sequence_length]
         label_data = self._load_label_data(label_file_path, valid_range=valid_range)
+
+        # 加载activity_flag数据（如果启用）
+        activity_mask = None
+        if self.activity_flag:
+            activity_filename = f"{file_prefix}{self.file_suffix['flag']}"
+            activity_file_path = os.path.join(trial_dir, activity_filename)
+
+            if os.path.exists(activity_file_path):
+                # activity_mask，数据是否有效的掩码，[sequence_length]
+                activity_mask = self._load_activity_flag(activity_file_path, valid_range=valid_range)
+            else:
+                raise FileNotFoundError(f"  警告: activity_flag已启用但文件不存在: {activity_file_path}")
 
         # 更新统计信息
         self.nan_removal_stats['trials_processed'] += 1
         if valid_range is not None:
             self.nan_removal_stats['trials_with_nan'] += 1
 
-        return input_data, label_data
+        return input_data, label_data, activity_mask
 
     def _load_input_data(self, file_path: str, body_mass: float) -> Tuple[torch.Tensor, Optional[Tuple[int, int]]]:
         '''
@@ -492,6 +473,7 @@ class TcnDataset(Dataset):
         '''
         # 读取CSV文件
         df = pd.read_csv(file_path)
+        # breakpoint()
         original_length = len(df)
 
         # 如果启用NaN移除，检测并截断
@@ -519,12 +501,10 @@ class TcnDataset(Dataset):
 
         # 左侧身体数据镜像处理
         if self.side == "l":
-            mirror_columns = [
-                "foot_imu_l_gyro_x", "foot_imu_l_gyro_y", "foot_imu_l_accel_z",
-                "shank_imu_l_gyro_x", "shank_imu_l_gyro_y", "shank_imu_l_accel_z",
-                "thigh_imu_l_gyro_x", "thigh_imu_l_gyro_y", "thigh_imu_l_accel_z",
-                "insole_l_cop_z"
-            ]
+            mirror_columns = ["foot_imu_l_gyro_x", "foot_imu_l_gyro_y", "foot_imu_l_accel_z",
+                              "shank_imu_l_gyro_x", "shank_imu_l_gyro_y", "shank_imu_l_accel_z",
+                              "thigh_imu_l_gyro_x", "thigh_imu_l_gyro_y", "thigh_imu_l_accel_z",
+                              "insole_l_cop_z"]
             for col in mirror_columns:
                 if col in df.columns:
                     df.loc[:, col] *= -1.0
@@ -572,45 +552,37 @@ class TcnDataset(Dataset):
 
         return label_data
 
-    def _add_zero_padding(self, data: List[Tuple[torch.Tensor, torch.Tensor]]) -> Tuple[
-        List[Tuple[torch.Tensor, torch.Tensor]], List[int]]:
+    def _load_activity_flag(self, file_path: str, valid_range: Optional[Tuple[int, int]] = None) -> torch.Tensor:
         '''
-        对试验数据进行零填充，使所有试验序列长度一致
+        加载activity_flag数据CSV文件
 
         参数:
-            data: [(input_tensor, label_tensor), ...] 列表
+            file_path: activity_flag文件路径
+            valid_range: 如果不为None，使用指定的有效范围以匹配输入数据
 
         返回:
-            padded_data: 填充后的数据列表
-            trial_sequence_lengths: 原始长度列表
+            activity_mask: [sequence_length] 值为0或1的掩码
         '''
-        trial_sequence_lengths = [trial_data[0].shape[-1] for trial_data in data]
-        max_sequence_length = max(trial_sequence_lengths) if trial_sequence_lengths else 0
+        df = pd.read_csv(file_path)
 
-        if max_sequence_length == 0:
-            # 所有序列都是空的
-            return data, trial_sequence_lengths
+        # 根据side选择列名
+        side_column = "left" if self.side == "l" else "right"
 
-        padded_data = []
-        # 对长度不足的试验进行填充
-        for i, (inp, lbl) in enumerate(data):
-            trial_sequence_length = trial_sequence_lengths[i]
-            if trial_sequence_length < max_sequence_length:
-                padding_length = max_sequence_length - trial_sequence_length
+        if side_column not in df.columns:
+            raise ValueError(f"activity_flag文件缺失必需的列: {side_column}")
 
-                # 填充输入数据
-                inp_pad = torch.zeros((inp.shape[0], inp.shape[1], padding_length), device=inp.device)
-                inp_padded = torch.cat([inp, inp_pad], dim=2)
+        # 如果指定了有效范围，截断activity_flag数据以匹配输入数据
+        if valid_range is not None:
+            start_idx, end_idx = valid_range
+            if end_idx == 0:
+                # 返回空张量
+                return torch.zeros(0, dtype=torch.float32)
+            df = df.iloc[start_idx:end_idx].copy()
 
-                # 填充标签数据
-                lbl_pad = torch.zeros((lbl.shape[0], lbl.shape[1], padding_length), device=lbl.device)
-                lbl_padded = torch.cat([lbl, lbl_pad], dim=2)
+        # 提取数据并转换为tensor
+        activity_mask = torch.tensor(df[side_column].values, dtype=torch.float32)
 
-                padded_data.append((inp_padded, lbl_padded))
-            else:
-                padded_data.append((inp, lbl))
-
-        return padded_data, trial_sequence_lengths
+        return activity_mask
 
     def print_nan_removal_summary(self):
         """打印NaN移除统计摘要"""
@@ -632,3 +604,79 @@ class TcnDataset(Dataset):
             print(f"平均每个含NaN试验移除的行数: {avg_rows_removed:.1f}")
 
         print(f"{'=' * 60}\n")
+
+
+def main():
+    sys.path.insert(0, '.')
+    from torch.utils.data import DataLoader
+    from utils.config_utils import load_config, apply_feature_selection
+    from utils.utils import collate_fn_tcn
+
+    parser = argparse.ArgumentParser(
+        description="快速测试 TcnDataset 数据加载流程，打印样本形状和统计信息。"
+    )
+    parser.add_argument("--config", type=str, default="configs.default_config",
+                        help="配置文件模块路径，默认 configs.default_config")
+    parser.add_argument("--mode", choices=["train", "test"], default="train",
+                        help="选择加载训练集或测试集")
+    parser.add_argument("--device", type=str, default="cpu",
+                        help="将数据加载到的设备，如 cpu 或 cuda:0")
+    parser.add_argument("--max_trials", type=int, default=3,
+                        help="最多打印多少个样本的尺寸信息")
+
+    args = parser.parse_args()
+
+    config = load_config(args.config)
+    config = apply_feature_selection(config)
+
+    # 替换配置中的通配符
+    input_names = [name.replace("*", config.side) for name in config.input_names]
+    label_names = [name.replace("*", config.side) for name in config.label_names]
+
+    device = torch.device(args.device)
+
+    tcn_kwargs = dict(data_dir=config.data_dir, input_names=input_names, label_names=label_names, side=config.side,
+                      participant_masses=config.participant_masses, device=device, action_patterns=getattr(config, 'action_patterns', None),
+                      enable_action_filter=getattr(config, 'enable_action_filter', False), activity_flag=config.activity_flag)
+    # print(tcn_kwargs)
+
+    dataset = TcnDataset(mode='train', **tcn_kwargs)
+
+    dataset_size = len(dataset)
+    lengths = getattr(dataset, "trial_lengths", [])
+
+    print("\n" + "=" * 70)
+    print("TCN 数据集测试概览")
+    print("=" * 70)
+    print(f"模式: {args.mode}")
+    print(f"试验数量: {dataset_size}")
+    print(f"输入特征数: {len(input_names)}, 标签特征数: {len(label_names)}")
+    if lengths:
+        print(f"序列长度统计 (帧) -> 平均 {np.mean(lengths):.1f}, "
+              f"中位 {np.median(lengths):.1f}, 范围 [{np.min(lengths)}, {np.max(lengths)}]")
+    else:
+        print("序列长度信息不可用。")
+    print("=" * 70 + "\n")
+
+    data_loader = DataLoader(dataset, batch_size=2, shuffle=False, collate_fn=collate_fn_tcn)
+
+    print("示例样本：")
+    for batch_idx, batch in enumerate(data_loader):
+        print(f"批次索引: {batch_idx}")
+        inputs = batch[0]
+        labels = batch[1]
+        seq_lengths = batch[2]
+        masks = batch[3]
+
+        print(f'输入传感器数据形状：{inputs.size()}')
+        print(f'输入标签数据形状：{labels.size()}')
+        print(f'输入数据长度：{seq_lengths}')
+        if masks[0] is not None:
+            for i in range(len(masks)):
+                print(f'输入掩码数据形状：{masks[i].size()}')
+
+        if batch_idx >= args.max_trials:
+            break
+
+if __name__ == "__main__":
+    main()

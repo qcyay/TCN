@@ -5,13 +5,16 @@ import random
 import numpy as np
 import inspect
 import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from models.predictor_model import PredictorTransformer
 from models.generative_model import GenerativeTransformer
 from models.tcn import TCN
 
 # 记录“模型 __init__ 参数名” 到 “config 中字段名”的映射
 # 没写在这里的默认认为两边同名
-CONFIG_ALIAS = {
+CONFIG_ATTRIBUTES = {
     "GenerativeTransformer": {
         "d_model": "gen_d_model",
         "nhead": "gen_nhead",
@@ -97,6 +100,29 @@ class EarlyStopping:
                 return True
         return False
 
+
+def create_model(config, device: torch.device, resume_path: str = None) -> Tuple[nn.Module, int]:
+    """创建或加载模型"""
+    model_type = config.model_type
+
+    if resume_path and os.path.exists(resume_path):
+        print(f"从检查点恢复训练: {resume_path}")
+        checkpoint = torch.load(resume_path, map_location=device)
+        start_epoch = checkpoint.get("epoch", 0) + 1
+
+        # 根据模型类型创建模型
+        model = create_model_from_config(model_type, checkpoint, config, device)
+
+        model.load_state_dict(checkpoint["state_dict"])
+        print(f"模型已加载,从第 {start_epoch} 轮继续训练")
+    else:
+        print(f"创建新的{model_type}模型")
+        model = create_model_from_config(model_type, None, config, device)
+        start_epoch = 0
+        print(f"新模型已创建，参数数量: {sum(p.numel() for p in model.parameters()):,}")
+
+    return model, start_epoch
+
 def create_model_from_config(model_type, checkpoint=None, config=None, device=None):
     """
     根据 model_type + config (+ 可选 checkpoint) 创建模型。
@@ -110,7 +136,7 @@ def create_model_from_config(model_type, checkpoint=None, config=None, device=No
         "TCN": TCN,
     }
     model_class = model_classes[model_type]
-    alias_map = CONFIG_ALIAS.get(model_type, {})
+    attributes_map = CONFIG_ATTRIBUTES.get(model_type, {})
 
     sig = inspect.signature(model_class.__init__)
     params = {}
@@ -123,7 +149,7 @@ def create_model_from_config(model_type, checkpoint=None, config=None, device=No
             if name == "self":
                 continue
 
-            cfg_attr = alias_map.get(name, name)  # 映射到 config 字段名
+            cfg_attr = attributes_map.get(name, name)  # 映射到 config 字段名
             if hasattr(config, cfg_attr):
                 params[name] = getattr(config, cfg_attr)
                 sources[name] = f"config.{cfg_attr}"
@@ -137,7 +163,7 @@ def create_model_from_config(model_type, checkpoint=None, config=None, device=No
                 params[name] = checkpoint[name]
                 sources[name] = "checkpoint"
             else:
-                cfg_attr = alias_map.get(name, name)
+                cfg_attr = attributes_map.get(name, name)
                 if hasattr(config, cfg_attr):
                     params[name] = getattr(config, cfg_attr)
                     sources[name] = f"config.{cfg_attr}"
@@ -149,6 +175,35 @@ def create_model_from_config(model_type, checkpoint=None, config=None, device=No
 
     model = model_class(**params).to(device)
     return model
+
+def save_model(model: nn.Module, save_dir: str, epoch: int, config,
+               optimizer: optim.Optimizer = None,
+               scheduler: ReduceLROnPlateau = None):
+    """保存模型检查点"""
+
+    checkpoint = {
+        "state_dict": model.state_dict(),
+        "epoch": epoch,
+        "model_type": config.model_type,
+        "input_size": config.input_size,
+        "output_size": config.output_size,
+        "center": config.center,
+        "scale": config.scale
+    }
+
+    # 利用MODEL_SPECIFIC_FIELDS动态添加模型特定参数
+    model_fields = MODEL_SPECIFIC_FIELDS.get(config.model_type, {})
+    for checkpoint_key, config_attr in model_fields.items():
+        checkpoint[checkpoint_key] = getattr(config, config_attr)
+
+    if optimizer is not None:
+        checkpoint["optimizer_state"] = optimizer.state_dict()
+    if scheduler is not None:
+        checkpoint["scheduler_state"] = scheduler.state_dict()
+
+    save_path = os.path.join(save_dir, f"model_epoch_{epoch}.tar")
+    torch.save(checkpoint, save_path)
+    print(f"模型已保存: {save_path}")
 
 def setup_device(device_str: str) -> torch.device:
     """
@@ -172,18 +227,12 @@ def setup_device(device_str: str) -> torch.device:
             props = torch.cuda.get_device_properties(i)
             print(f"  GPU {i}: {props.name} ({props.total_memory / 1024 ** 3:.1f} GB)")
 
-    # 解析设备字符串
-    device_str = device_str.lower().strip()
-
     if device_str == "cpu":
         print(f"\n使用设备: CPU")
         return torch.device("cpu")
 
     # 处理纯数字（如 '0', '1', '2', '3'）
     if device_str.isdigit() or device_str.startswith("cuda"):
-        if not torch.cuda.is_available():
-            print(f"警告: CUDA不可用，回退到CPU")
-            return torch.device("cpu")
 
         # 解析GPU编号
         if device_str == "cuda":
@@ -191,10 +240,6 @@ def setup_device(device_str: str) -> torch.device:
 
         gpu_id = int(device_str)
         num_gpus = torch.cuda.device_count()
-
-        if gpu_id >= num_gpus or gpu_id < 0:
-            print(f"警告: GPU {gpu_id} 不存在（可用GPU: 0-{num_gpus - 1}），使用 GPU 0")
-            gpu_id = 0
 
         device = torch.device(f"cuda:{gpu_id}")
         print(f"\n使用设备: GPU {gpu_id} - {torch.cuda.get_device_properties(gpu_id).name}")
@@ -220,6 +265,9 @@ def collate_fn_tcn(batch):
     inputs = [item[0] for item in batch]
     labels = [item[1] for item in batch]
     lengths = [item[2][0] for item in batch]
+    masks = [item[3] for item in batch]
+
+    # breakpoint()
 
     max_len = max(lengths)
     padded_inputs = []
@@ -228,17 +276,17 @@ def collate_fn_tcn(batch):
     for inp, lbl, length in zip(inputs, labels, lengths):
         if inp.shape[-1] < max_len:
             pad_len = max_len - inp.shape[-1]
-            inp_pad = torch.zeros((1, inp.shape[1], pad_len), device=inp.device)
-            lbl_pad = torch.zeros((1, lbl.shape[1], pad_len), device=lbl.device)
-            inp = torch.cat([inp, inp_pad], dim=2)
-            lbl = torch.cat([lbl, lbl_pad], dim=2)
+            inp_pad = torch.zeros((inp.shape[0], pad_len), device=inp.device)
+            lbl_pad = torch.zeros((lbl.shape[0], pad_len), device=lbl.device)
+            inp = torch.cat([inp, inp_pad], dim=1)
+            lbl = torch.cat([lbl, lbl_pad], dim=1)
         padded_inputs.append(inp)
         padded_labels.append(lbl)
 
-    batch_inputs = torch.cat(padded_inputs, dim=0)
-    batch_labels = torch.cat(padded_labels, dim=0)
+    batch_inputs = torch.stack(padded_inputs, dim=0)
+    batch_labels = torch.stack(padded_labels, dim=0)
 
-    return batch_inputs, batch_labels, lengths
+    return batch_inputs, batch_labels, lengths, masks
 
 
 def collate_fn_predictor(batch):
