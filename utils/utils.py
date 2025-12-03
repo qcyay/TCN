@@ -357,7 +357,8 @@ def collate_fn_predictor(batch):
     """预测模型的collate函数"""
     inputs = torch.stack([item[0] for item in batch])
     labels = torch.stack([item[1] for item in batch])
-    return inputs, labels
+    masks = torch.stack([item[2] for item in batch]) if batch[0][2] is not None else None
+    return inputs, labels, masks
 
 
 def collate_fn_generative(batch):

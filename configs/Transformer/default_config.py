@@ -18,6 +18,12 @@ data_dir = 'data'
 # 使用的身体侧别 (l: 左侧, r: 右侧)
 side = "r"
 
+# ==================== Activity Flag 配置 ====================
+# 是否启用activity_flag掩码功能
+# True: 读取activity_flag.csv文件，只在掩码为1的位置计算损失和指标
+# False: 不使用activity_flag，在所有位置计算损失和指标
+activity_flag = True
+
 # 模型输入特征名称(* 会被替换为 side)
 input_names = [
     "foot_imu_*_gyro_x", "foot_imu_*_gyro_y", "foot_imu_*_gyro_z",
@@ -105,6 +111,41 @@ action_patterns = [
 	r"^squats_.*",  # 26. Squat
 	r"^curb_.*",  # 27. Curb
 	r"^step_ups_.*",  # 28. Step up
+]
+
+# ==================== 可视化配置 ====================
+
+# 是否生成箱线图
+generate_boxplots = True
+
+# 是否为三大类别生成箱线图（Cyclic, Impedance-like, Unstructured）
+plot_categories = True
+
+# 是否为未见任务生成箱线图
+plot_unseen = True
+
+# 额外需要绘制分面箱线图的运动类型（可以是单独的运动类型）
+# 格式: 列表中每个元素是一个字典，包含'name'和'patterns'
+# 'name': 显示在图中的名称
+# 'patterns': 正则表达式列表，用于匹配该类型
+additional_plot_groups = [
+    # 示例: 只看行走类任务
+    # {
+    #     'name': 'Walking Tasks',
+    #     'patterns': [
+    #         r"^normal_walk_.*_(shuffle|0-6|1-2|1-8).*",
+    #         r"^walk_backward_.*",
+    #         r"^weighted_walk_.*",
+    #         r"^incline_walk_.*",
+    #     ]
+    # },
+    # 示例: 只看跳跃类任务
+    # {
+    #     'name': 'Jumping Tasks',
+    #     'patterns': [
+    #         r"^jump_.*",
+    #     ]
+    # },
 ]
 
 # 模型输出(预测)的标签名称

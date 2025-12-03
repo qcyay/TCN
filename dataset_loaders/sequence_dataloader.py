@@ -31,7 +31,8 @@ class SequenceDataset(Dataset):
                  file_suffix: Dict[str, str] = None,
                  remove_nan: bool = True,
                  action_patterns: Optional[List[str]] = None,
-                 enable_action_filter: bool = False):
+                 enable_action_filter: bool = False,
+                 activity_flag: bool = False):
         """
         初始化序列数据集
 
@@ -68,12 +69,15 @@ class SequenceDataset(Dataset):
         self.remove_nan = remove_nan
         self.action_patterns = action_patterns
         self.enable_action_filter = enable_action_filter
+        self.activity_flag = activity_flag
+        self.all_activity_mask = []  # 存储所有试验的activity flag掩码
 
         # 设置文件后缀映射
         if file_suffix is None:
             self.file_suffix = {
                 "input": "_exo.csv",
-                "label": "_moment_filt.csv"
+                "label": "_moment_filt.csv",
+                "flag": "_activity_flag.csv"
             }
         else:
             self.file_suffix = file_suffix
@@ -84,6 +88,9 @@ class SequenceDataset(Dataset):
 
         # 获取试验名称列表
         self.trial_names = self._get_trial_names()
+
+        ## 测试,正式训练时改行需要注释
+        self.trial_names = self.trial_names[:10]
 
         # 统计信息
         self.nan_removal_stats = {
@@ -129,6 +136,7 @@ class SequenceDataset(Dataset):
             - input_data: [num_input_features, sequence_length]
             - label_data: [num_label_features, output_sequence_length]
                          注意：每个输出通道根据model_delays[i]从不同位置开始
+            - mask:[output_sequence_length]
 
         对于GenerativeTransformer:
             返回: (input_data, shifted_label_data, label_data)
@@ -146,9 +154,12 @@ class SequenceDataset(Dataset):
         # 提取标签序列 - 每个输出通道根据其delay分别提取
         num_outputs = len(self.model_delays)
         label_data = self.all_label_data[trial_idx]
+        if self.activity_flag:
+            mask_data = self.all_activity_mask[trial_idx]
 
         # 为每个输出通道创建标签序列
         label_seqs = []
+        mask_seqs = [] if self.activity_flag else None
         input_end_idx = input_start_idx + self.sequence_length
 
         for i in range(num_outputs):
@@ -157,21 +168,27 @@ class SequenceDataset(Dataset):
             label_end = label_start + self.output_sequence_length
             channel_label = label_data[i:i + 1, label_start:label_end]  # [1, output_sequence_length]
             label_seqs.append(channel_label)
+            if self.activity_flag:
+                channel_mask = mask_data[label_start:label_end] # [output_sequence_length]
+                mask_seqs.append(channel_mask)
 
         # 拼接所有输出通道
         label_seq = np.concatenate(label_seqs, axis=0)  # [num_outputs, output_sequence_length]
+        if self.activity_flag:
+            mask_seqs = np.stack(mask_seqs, axis=0) # [num_outputs, output_sequence_length]
 
         # 转换为tensor
         input_seq = torch.from_numpy(input_seq).float()
         label_seq = torch.from_numpy(label_seq).float()
+        if self.activity_flag:
+            mask_seqs = torch.from_numpy(mask_seqs).float()
 
         if self.model_type == 'GenerativeTransformer':
             # 生成式模型需要shifted的标签作为解码器输入
             shifted_label_seq = self._create_shifted_target(label_seq)
-            return input_seq, shifted_label_seq, label_seq
+            return input_seq, shifted_label_seq, label_seq, mask_seqs
         else:
-            # 预测模型直接返回
-            return input_seq, label_seq
+            return input_seq, label_seq, mask_seqs
 
     def _create_shifted_target(self, label_seq: torch.Tensor) -> torch.Tensor:
         """
@@ -316,11 +333,13 @@ class SequenceDataset(Dataset):
                 print(f"  加载进度: {trial_idx + 1}/{len(self.trial_names)}")
 
             # 加载单个试验数据
-            input_data, label_data = self._load_trial_data(trial_name)
+            input_data, label_data, activity_mask = self._load_trial_data(trial_name)
 
             # 转换为numpy数组并存储
             self.all_input_data.append(input_data.numpy())
             self.all_label_data.append(label_data.numpy())
+            if activity_mask is not None:
+                self.all_activity_mask.append(activity_mask.numpy())
 
         print("所有数据预加载完成!")
 
@@ -359,18 +378,20 @@ class SequenceDataset(Dataset):
             self.trial_names = [self.trial_names[i] for i in valid_indices]
             self.all_input_data = [self.all_input_data[i] for i in valid_indices]
             self.all_label_data = [self.all_label_data[i] for i in valid_indices]
+            self.all_activity_mask = [self.all_activity_mask[i] for i in valid_indices]
 
             print(f"  移除完成，剩余 {len(self.trial_names)} 个有效试验")
         else:
             print("  未发现标签全为NaN的序列")
 
-    def _load_trial_data(self, trial_name: str) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _load_trial_data(self, trial_name: str) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
         '''
         加载单个试验的完整数据
 
         返回:
             input_data: [num_input_features, sequence_length]
             label_data: [num_label_features, sequence_length]
+            activity_mask: [sequence_length] or None
         '''
         trial_dir = os.path.join(self.data_dir, self.mode, trial_name)
 
@@ -399,8 +420,17 @@ class SequenceDataset(Dataset):
         input_data, valid_range = self._load_input_data(input_file_path, body_mass)
         label_data = self._load_label_data(label_file_path, valid_range)
 
+        activity_mask = None
+        if self.activity_flag:
+            activity_filename = f"{file_prefix}{self.file_suffix['flag']}"
+            activity_file_path = os.path.join(trial_dir, activity_filename)
+            if os.path.exists(activity_file_path):
+                activity_mask = self._load_activity_flag(activity_file_path, valid_range)
+            else:
+                raise FileNotFoundError(f"activity_flag已启用但文件不存在: {activity_file_path}")
+
         # 注意：不在这里应用延迟，延迟会在生成序列索引时处理
-        return input_data, label_data
+        return input_data, label_data, activity_mask
 
     def _load_input_data(self, file_path: str, body_mass: float) -> Tuple[torch.Tensor, Optional[Tuple[int, int]]]:
         '''加载并预处理输入数据'''
@@ -471,6 +501,20 @@ class SequenceDataset(Dataset):
 
         return label_data
 
+    # 添加 _load_activity_flag 方法（与dataloader.py相同）
+    def _load_activity_flag(self, file_path: str, valid_range: Optional[Tuple[int, int]] = None) -> torch.Tensor:
+        df = pd.read_csv(file_path)
+        side_column = "left" if self.side == "l" else "right"
+        if side_column not in df.columns:
+            raise ValueError(f"activity_flag文件缺失必需的列: {side_column}")
+        if valid_range is not None:
+            start_idx, end_idx = valid_range
+            if end_idx == 0:
+                return torch.zeros(0, dtype=torch.float32)
+            df = df.iloc[start_idx:end_idx].copy()
+        activity_mask = torch.tensor(df[side_column].values, dtype=torch.float32)
+        return activity_mask
+
     def _generate_sequences(self) -> List[Tuple[int, int]]:
         '''
         生成所有可用的序列索引（关键优化）
@@ -482,6 +526,7 @@ class SequenceDataset(Dataset):
         - input_seq: 从 input_start_idx 开始，长度为 sequence_length
         - label_seq的每个通道: 从 input_start_idx + sequence_length + model_delays[i] 开始，
                                长度为 output_sequence_length
+        - mask_seq: 从 input_start_idx + sequence_length + model_delays[i] 开始，长度为 output_sequence_length
         '''
         sequences = []
 
@@ -492,6 +537,9 @@ class SequenceDataset(Dataset):
             # 获取该试验的数据长度
             input_len = self.all_input_data[trial_idx].shape[1]
             label_len = self.all_label_data[trial_idx].shape[1]
+            mask_len = self.all_activity_mask[trial_idx].shape[0]
+
+            assert label_len == mask_len
 
             # 确保输入和标签长度一致
             data_len = min(input_len, label_len)
@@ -530,3 +578,83 @@ class SequenceDataset(Dataset):
         print(f"{'=' * 60}")
         print(f"标签全为NaN的试验数: {stats['trials_with_all_nan_labels']}")
         print(f"{'=' * 60}\n")
+
+def main():
+    import sys
+    sys.path.insert(0, '.')
+    import argparse
+    from torch.utils.data import DataLoader
+    from utils.config_utils import load_config, apply_feature_selection
+    from utils.utils import collate_fn_predictor
+
+    parser = argparse.ArgumentParser(
+        description="快速测试 SequenceDataset 数据加载流程，打印样本形状和统计信息。"
+    )
+    parser.add_argument("--config", type=str, default="configs.default_config",
+                        help="配置文件模块路径，默认 configs.default_config")
+    parser.add_argument("--mode", choices=["train", "test"], default="train",
+                        help="选择加载训练集或测试集")
+    parser.add_argument("--device", type=str, default="cpu",
+                        help="将数据加载到的设备，如 cpu 或 cuda:0")
+    parser.add_argument("--max_trials", type=int, default=3,
+                        help="最多打印多少个样本的尺寸信息")
+
+    args = parser.parse_args()
+
+    config = load_config(args.config)
+    config = apply_feature_selection(config)
+
+    # 替换配置中的通配符
+    input_names = [name.replace("*", config.side) for name in config.input_names]
+    label_names = [name.replace("*", config.side) for name in config.label_names]
+
+    device = torch.device(args.device)
+
+    seq_len = config.gen_sequence_length if config.model_type == "GenerativeTransformer" else config.sequence_length
+
+    sequence_kwargs = dict(data_dir=config.data_dir, input_names=input_names, label_names=label_names, side=config.side,
+                           sequence_length=seq_len, output_sequence_length=config.output_sequence_length, model_delays=config.model_delays,
+                           participant_masses=config.participant_masses, device=device, model_type=config.model_type,
+                           start_token_value=config.start_token_value if config.model_type == "GenerativeTransformer" else 0.0,
+                           remove_nan=True, action_patterns=getattr(config, 'action_patterns', None),
+                           enable_action_filter=getattr(config, 'enable_action_filter', False), activity_flag=config.activity_flag)
+
+    dataset = SequenceDataset(mode='train', **sequence_kwargs)
+
+    dataset_size = len(dataset)
+    lengths = getattr(dataset, "trial_lengths", [])
+
+    print("\n" + "=" * 70)
+    print("Sequence 数据集测试概览")
+    print("=" * 70)
+    print(f"模式: {args.mode}")
+    print(f"试验数量: {dataset_size}")
+    print(f"输入特征数: {len(input_names)}, 标签特征数: {len(label_names)}")
+    if lengths:
+        print(f"序列长度统计 (帧) -> 平均 {np.mean(lengths):.1f}, "
+              f"中位 {np.median(lengths):.1f}, 范围 [{np.min(lengths)}, {np.max(lengths)}]")
+    else:
+        print("序列长度信息不可用。")
+    print("=" * 70 + "\n")
+
+    data_loader = DataLoader(dataset, batch_size=2, shuffle=False, collate_fn=collate_fn_predictor)
+
+    print("示例样本：")
+    for batch_idx, batch in enumerate(data_loader):
+        print(f"批次索引: {batch_idx}")
+        inputs = batch[0]
+        labels = batch[1]
+        masks = batch[2]
+
+        print(f'输入传感器数据形状：{inputs.size()}')
+        print(f'输入标签数据形状：{labels.size()}')
+        if masks is not None:
+            print(f'输入掩码数据形状：{masks.size()}')
+
+        breakpoint()
+
+        if batch_idx >= args.max_trials:
+            break
+
+if __name__ == "__main__":
+    main()
