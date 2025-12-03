@@ -52,185 +52,6 @@ def load_model(model_path: str, device: torch.device):
 
     return model, model_type
 
-
-def print_category_results(category_metrics: Dict, label_names: List[str]):
-    """打印各类别的测试结果"""
-    print("\n" + "=" * 80)
-    print("按类别统计的测试结果:")
-    print("=" * 80)
-
-    # 定义类别顺序
-    category_order = ['All', 'Cyclic', 'Impedance-like', 'Unstructured', 'Unseen']
-
-    for category in category_order:
-        if category not in category_metrics:
-            continue
-
-        print(f"\n【{category}】")
-        print("-" * 80)
-
-        for label_name in label_names:
-            if label_name not in category_metrics[category]:
-                continue
-
-            metrics = category_metrics[category][label_name]
-
-            # 计算均值
-            mean_rmse = sum(metrics['rmse']) / len(metrics['rmse']) if metrics['rmse'] else 0
-            mean_r2 = sum(metrics['r2']) / len(metrics['r2']) if metrics['r2'] else 0
-            mean_mae = sum(metrics['mae_percent']) / len(metrics['mae_percent']) if metrics['mae_percent'] else 0
-
-            print(f"\n  {label_name}:")
-            print(f"    RMSE: {mean_rmse:.4f} Nm/kg (n={len(metrics['rmse'])})")
-            print(f"    R²: {mean_r2:.4f} (n={len(metrics['r2'])})")
-            print(f"    MAE: {mean_mae:.2f}% (n={len(metrics['mae_percent'])})")
-
-    print("\n" + "=" * 80 + "\n")
-
-
-def create_boxplots(
-        category_metrics: Dict,
-        label_names: List[str],
-        save_dir: str,
-        categories_to_plot: List[str] = ['Cyclic', 'Impedance-like', 'Unstructured']
-):
-    """
-    创建分面箱线图
-
-    参数:
-        category_metrics: 类别指标字典
-        label_names: 标签名称列表
-        save_dir: 保存目录
-        categories_to_plot: 要绘制的类别列表
-    """
-    # 定义指标的显示名称和单位
-    metric_info = {
-        'rmse': {'name': 'RMSE', 'unit': 'Nm/kg', 'ylabel': 'RMSE (Nm/kg)'},
-        'r2': {'name': 'R²', 'unit': '', 'ylabel': 'R²'},
-        'mae_percent': {'name': 'MAE', 'unit': '%', 'ylabel': 'Normalized MAE (%)'}
-    }
-
-    # 简化标签名称用于显示
-    label_display_names = {
-        "hip_flexion_r_moment": "Hip",
-        "knee_angle_r_moment": "Knee",
-        "hip_flexion_l_moment": "Hip",
-        "knee_angle_l_moment": "Knee"
-    }
-
-    for label_idx, label_name in enumerate(label_names):
-        # 为每个输出通道创建一个图
-        fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-        fig.suptitle(f'{label_display_names.get(label_name, label_name)} Moment Prediction',
-                     fontsize=16, fontweight='bold')
-
-        for metric_idx, (metric_key, metric_data) in enumerate(metric_info.items()):
-            ax = axes[metric_idx]
-
-            # 收集数据
-            data_to_plot = []
-            positions = []
-            labels = []
-
-            for cat_idx, category in enumerate(categories_to_plot):
-                if category in category_metrics and label_name in category_metrics[category]:
-                    values = category_metrics[category][label_name].get(metric_key, [])
-                    if values:
-                        data_to_plot.append(values)
-                        positions.append(cat_idx + 1)
-                        labels.append(category)
-
-            if not data_to_plot:
-                ax.text(0.5, 0.5, 'No Data', ha='center', va='center', transform=ax.transAxes)
-                ax.set_title(metric_data['name'])
-                continue
-
-            # 创建箱线图
-            bp = ax.boxplot(data_to_plot, positions=positions, widths=0.6,
-                            patch_artist=True, showfliers=True,
-                            boxprops=dict(facecolor='lightblue', edgecolor='black', linewidth=1.5),
-                            medianprops=dict(color='black', linewidth=2),
-                            whiskerprops=dict(color='black', linewidth=1.5),
-                            capprops=dict(color='black', linewidth=1.5),
-                            flierprops=dict(marker='o', markerfacecolor='gray', markersize=4,
-                                            linestyle='none', markeredgecolor='gray'))
-
-            # 添加均值标记（黑色方块）
-            for i, values in enumerate(data_to_plot):
-                mean_val = sum(values) / len(values)
-                ax.plot(positions[i], mean_val, marker='s', markersize=6,
-                        color='black', zorder=3)
-
-            # 设置标题和标签
-            ax.set_title(metric_data['name'], fontsize=14, fontweight='bold')
-            ax.set_ylabel(metric_data['ylabel'], fontsize=12)
-            ax.set_xticks(positions)
-            ax.set_xticklabels(labels, fontsize=11)
-            ax.grid(axis='y', alpha=0.3, linestyle='--')
-
-            # 为R²添加灰色背景
-            if metric_key == 'r2':
-                ax.set_facecolor('#f0f0f0')
-
-        plt.tight_layout()
-
-        # 保存图片
-        save_path = os.path.join(save_dir, f'boxplot_{label_name}_{"-".join(categories_to_plot)}.png')
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"箱线图已保存: {save_path}")
-        plt.close()
-
-
-def save_metrics_to_file(category_metrics: Dict, label_names: List[str], save_dir: str):
-    """将指标保存到文本文件"""
-    save_path = os.path.join(save_dir, 'test_results_by_category.txt')
-
-    with open(save_path, 'w') as f:
-        f.write("=" * 80 + "\n")
-        f.write("按类别统计的测试结果\n")
-        f.write("=" * 80 + "\n\n")
-
-        # 定义类别顺序
-        category_order = ['All', 'Cyclic', 'Impedance-like', 'Unstructured', 'Unseen']
-
-        for category in category_order:
-            if category not in category_metrics:
-                continue
-
-            f.write(f"【{category}】\n")
-            f.write("-" * 80 + "\n")
-
-            for label_name in label_names:
-                if label_name not in category_metrics[category]:
-                    continue
-
-                metrics = category_metrics[category][label_name]
-
-                # 计算均值和标准差
-                mean_rmse = sum(metrics['rmse']) / len(metrics['rmse']) if metrics['rmse'] else 0
-                std_rmse = (sum((x - mean_rmse) ** 2 for x in metrics['rmse']) / len(metrics['rmse'])) ** 0.5 if \
-                metrics['rmse'] else 0
-
-                mean_r2 = sum(metrics['r2']) / len(metrics['r2']) if metrics['r2'] else 0
-                std_r2 = (sum((x - mean_r2) ** 2 for x in metrics['r2']) / len(metrics['r2'])) ** 0.5 if metrics[
-                    'r2'] else 0
-
-                mean_mae = sum(metrics['mae_percent']) / len(metrics['mae_percent']) if metrics['mae_percent'] else 0
-                std_mae = (sum((x - mean_mae) ** 2 for x in metrics['mae_percent']) / len(
-                    metrics['mae_percent'])) ** 0.5 if metrics['mae_percent'] else 0
-
-                f.write(f"\n  {label_name}:\n")
-                f.write(f"    RMSE: {mean_rmse:.4f} ± {std_rmse:.4f} Nm/kg (n={len(metrics['rmse'])})\n")
-                f.write(f"    R²: {mean_r2:.4f} ± {std_r2:.4f} (n={len(metrics['r2'])})\n")
-                f.write(f"    MAE: {mean_mae:.2f} ± {std_mae:.2f}% (n={len(metrics['mae_percent'])})\n")
-
-            f.write("\n")
-
-        f.write("=" * 80 + "\n")
-
-    print(f"测试结果已保存到: {save_path}")
-
-
 def main():
     # 设置并验证设备
     device = setup_device(args.device)
@@ -253,13 +74,13 @@ def main():
     label_names = [name.replace("*", config.side) for name in config.label_names]
 
     # 获取类别映射和未见过任务列表
-    action_to_category = getattr(config, 'action_to_category', {})
-    unseen_patterns = getattr(config, 'unseen_action_patterns', [])
+    action_to_category = ACTION_TO_CATEGORY
+    unseen_patterns = UNSEEN_ACTION_PATTERNS
 
     # 根据模型类型加载数据集
     if model_type in ["Transformer", "GenerativeTransformer"]:
         seq_len = config.gen_sequence_length if model_type == "GenerativeTransformer" else config.sequence_length
-        output_seq_len = getattr(config, 'output_sequence_length', seq_len)
+        output_seq_len = config.output_sequence_length
 
         print(f"\n加载{model_type}测试数据集...")
         test_dataset = SequenceDataset(
@@ -367,7 +188,7 @@ def main():
             participant_masses=config.participant_masses,
             device=device,
             mode='test',
-            load_to_device=False
+            activity_flag=config.activity_flag
         )
 
         test_loader = DataLoader(
@@ -380,14 +201,20 @@ def main():
         print(f"测试集大小: {len(test_dataset)} 个试验")
 
         # 进行测试 - 逐个处理并收集完整序列
-        reconstructed_estimates = []
-        reconstructed_labels = []
+        all_estimates = []
+        all_labels = []
+        all_masks = []
 
         print("\n开始预测...")
         with torch.no_grad():
-            for input_data, label_data, trial_lengths in test_loader:
+            for input_data, label_data, trial_lengths, activity_masks in test_loader:
                 input_data = input_data.to(device)
                 label_data = label_data.to(device)
+
+                mask_flag = True if activity_masks[0] is not None else False
+
+                if mask_flag:
+                    activity_masks = [m.to(device) for m in activity_masks]
 
                 estimates = model(input_data)
 
@@ -396,8 +223,15 @@ def main():
                 batch_size = estimates.size(0)
 
                 for i in range(batch_size):
+                    # 尺寸为[N_label,n]
                     est_trial = estimates[i, :, model_history:trial_lengths[i]]
+                    # 尺寸为[N_label,n]
                     lbl_trial = label_data[i, :, model_history:trial_lengths[i]]
+
+                    # 获取activity_mask
+                    if mask_flag:
+                        # 尺寸为[n]
+                        act_mask_trial = activity_masks[i][model_history:]
 
                     # 找到最大delay
                     max_delay = max(config.model_delays)
@@ -414,19 +248,28 @@ def main():
                         delay = config.model_delays[j]
 
                         # 预测值：从max_delay位置开始取
+                        # 尺寸为[n-max_delay]
                         est = est_trial[j, max_delay:]
 
                         # 标签：根据delay偏移
                         lbl_start = max_delay - delay
                         lbl_end = lbl_start + valid_length
+                        # 尺寸为[n-max_delay]
                         lbl = lbl_trial[j, lbl_start:lbl_end]
 
                         aligned_est.append(est)
                         aligned_lbl.append(lbl)
 
-                    # 堆叠为 [num_outputs, seq_len]
-                    reconstructed_estimates.append(torch.stack(aligned_est))
-                    reconstructed_labels.append(torch.stack(aligned_lbl))
+                    # 列表,包含N_test个tensor,尺寸为[num_outputs, n-max_delay]
+                    all_estimates.append(torch.stack(aligned_est))
+                    # 列表,包含N_test个tensor,尺寸为[num_outputs, n-max_delay]
+                    all_labels.append(torch.stack(aligned_lbl))
+
+                    # 获取对应的activity_mask
+                    # 尺寸为[n-max_delay]
+                    if mask_flag:
+                        act_mask_j = act_mask_trial[max_delay:]
+                        all_masks.append(act_mask_j)
 
         # 获取trial名称列表
         trial_names = test_dataset.trial_names
@@ -434,12 +277,13 @@ def main():
     # 计算按类别分组的指标
     print("\n计算各类别指标...")
     category_metrics = compute_category_metrics(
-        reconstructed_estimates,
-        reconstructed_labels,
+        all_estimates,
+        all_labels,
         trial_names,
         label_names,
         action_to_category,
-        unseen_patterns
+        unseen_patterns,
+        all_masks
     )
 
     # 打印结果
@@ -537,12 +381,13 @@ def main():
 
             # 计算这个组的指标
             temp_metrics = compute_category_metrics(
-                reconstructed_estimates,
-                reconstructed_labels,
+                all_estimates,
+                all_labels,
                 trial_names,
                 label_names,
                 temp_category_map,
-                []  # 不考虑unseen
+                [],  # 不考虑unseen
+                all_masks
             )
 
             # 如果有数据，创建箱线图

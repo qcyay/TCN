@@ -1,11 +1,17 @@
 import sys
 sys.path.insert(0, '.')
 import os
+import re
 import shutil
 from typing import List, Tuple, Dict
+from collections import defaultdict
 import random
 import numpy as np
 import inspect
+# 设置Matplotlib使用Agg后端（无图形界面）
+import matplotlib
+matplotlib.use('Agg')  # 关键：使用非交互式后端
+import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -70,6 +76,62 @@ MODEL_SPECIFIC_FIELDS: Dict[str, Dict[str, str]] = {
         "norm": "norm",
     },
 }
+
+# ==================== 运动类型分类配置 ====================
+
+# 运动类型到大类的映射（用于test.py分类评估）
+# 键为运动类型的正则表达式，值为大类名称
+ACTION_TO_CATEGORY = {
+    # 周期性运动 (Cyclic)
+    r"^normal_walk_.*_(shuffle|0-6|1-2|1-8).*": "Cyclic",  # Level ground walk
+    r"^walk_backward_.*": "Cyclic",  # Backwards walk
+    r"^weighted_walk_.*": "Cyclic",  # 25 lb Loaded walk
+    r"^normal_walk_.*_(2-0|2-5).*": "Cyclic",  # Run
+    r"^dynamic_walk_.*(toe-walk|heel-walk).*": "Cyclic",  # Toe and heel walk
+    r"^incline_walk_.*up.*": "Cyclic",  # Inclined walk
+    r"^stairs_.*down.*": "Cyclic",  # Stair descent
+    r"^stairs_.*up.*": "Cyclic",  # Stair ascent
+    r"^incline_walk_.*down.*": "Cyclic",  # Declined walk
+
+    # 阻抗性运动 (Impedance-like)
+    r"^poses_.*": "Impedance-like",  # Standing poses
+    r"^jump_.*_(hop|vertical|180|90-f|90-s).*": "Impedance-like",  # Jump in place
+    r"^sit_to_stand_.*": "Impedance-like",  # Sit and stand
+    r"^lift_weight_.*": "Impedance-like",  # Lift and place weight
+    r"^tug_of_war_.*": "Impedance-like",  # Tug of war
+    r"^jump_.*_(fb|lateral).*": "Impedance-like",  # Jump across (part)
+    r"^side_shuffle_.*": "Impedance-like",  # Jump across (part)
+    r"^lunges_.*": "Impedance-like",  # Lunge
+    r"^ball_toss_.*": "Impedance-like",  # Medicine ball toss
+    r"^squats_.*": "Impedance-like",  # Squat
+    r"^step_ups_.*": "Impedance-like",  # Step up
+
+    # 非结构化运动 (Unstructured)
+    r"^dynamic_walk_.*(high-knees|butt-kicks).*": "Unstructured",  # Calisthenics (part)
+    r"^normal_walk_.*skip.*": "Unstructured",  # Calisthenics (part)
+    r"^tire_run_.*": "Unstructured",  # Calisthenics (part)
+    r"^push_.*": "Unstructured",  # Push and pull recovery
+    r"^turn_and_step_.*": "Unstructured",  # Turns
+    r"^cutting_.*": "Unstructured",  # Cut
+    r"^twister_.*": "Unstructured",  # Twister
+    r"^meander_.*": "Unstructured",  # Meander
+    r"^start_stop_.*": "Unstructured",  # Start and stop
+    r"^obstacle_walk_.*": "Unstructured",  # Step over
+    r"^curb_.*": "Unstructured",  # Curb
+}
+
+# 训练集中未见过的任务（用于单独评估）
+UNSEEN_ACTION_PATTERNS = [
+    r"^lunges_.*",  # Lunge
+    r"^stairs_.*up.*",  # Stair ascent
+    r"^incline_walk_.*down.*",  # Declined walk
+    r"^start_stop_.*",  # Start and stop
+    r"^ball_toss_.*",  # Medicine ball toss
+    r"^obstacle_walk_.*",  # Step over
+    r"^squats_.*",  # Squat
+    r"^curb_.*",  # Curb
+    r"^step_ups_.*",  # Step up
+]
 
 class EarlyStopping:
     """早停机制"""
@@ -606,7 +668,8 @@ def compute_metrics_tcn_trial(estimates: torch.Tensor,
 
 def compute_metrics_per_sequence(
         estimates: torch.Tensor,
-        labels: torch.Tensor
+        labels: torch.Tensor,
+        mask: torch.Tensor = None
 ) -> Dict[str, float]:
     """
     计算单个序列的指标
@@ -620,6 +683,8 @@ def compute_metrics_per_sequence(
     """
     # 创建有效数据掩码
     valid_mask = ~torch.isnan(estimates) & ~torch.isnan(labels)
+    if mask is not None:
+        valid_mask = valid_mask & (mask == 1)
 
     if valid_mask.sum() == 0:
         return None
@@ -648,7 +713,8 @@ def compute_category_metrics(
         trial_names: List[str],
         label_names: List[str],
         action_to_category: Dict[str, str],
-        unseen_patterns: List[str]
+        unseen_patterns: List[str],
+        masks_list: List[torch.Tensor] = None
 ) -> Dict:
     """
     计算各类别的指标
@@ -670,7 +736,11 @@ def compute_category_metrics(
     # category_metrics[category][label_name][metric] = [value1, value2, ...]
     category_metrics = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
 
-    for est_seq, lbl_seq, trial_name in zip(estimates_list, labels_list, trial_names):
+    # 根据masks_list是否为None创建迭代器
+    if masks_list is None:
+        masks_list = [None] * len(estimates_list)
+
+    for est_seq, lbl_seq, trial_name, mask in zip(estimates_list, labels_list, trial_names, masks_list):
         # 判断类别
         category = categorize_trial(trial_name, action_to_category)
 
@@ -682,7 +752,7 @@ def compute_category_metrics(
             est = est_seq[j]  # [seq_len]
             lbl = lbl_seq[j]  # [seq_len]
 
-            metrics = compute_metrics_per_sequence(est, lbl)
+            metrics = compute_metrics_per_sequence(est, lbl, mask)
 
             if metrics is not None:
                 # 添加到对应类别
@@ -702,6 +772,182 @@ def compute_category_metrics(
                     category_metrics['Unseen'][label_name]['mae_percent'].append(metrics['mae_percent'])
 
     return category_metrics
+
+
+def print_category_results(category_metrics: Dict, label_names: List[str]):
+    """打印各类别的测试结果"""
+    print("\n" + "=" * 80)
+    print("按类别统计的测试结果:")
+    print("=" * 80)
+
+    # 定义类别顺序
+    category_order = ['All', 'Cyclic', 'Impedance-like', 'Unstructured', 'Unseen']
+
+    for category in category_order:
+        if category not in category_metrics:
+            continue
+
+        print(f"\n【{category}】")
+        print("-" * 80)
+
+        for label_name in label_names:
+            if label_name not in category_metrics[category]:
+                continue
+
+            metrics = category_metrics[category][label_name]
+
+            # 计算均值
+            mean_rmse = sum(metrics['rmse']) / len(metrics['rmse']) if metrics['rmse'] else 0
+            mean_r2 = sum(metrics['r2']) / len(metrics['r2']) if metrics['r2'] else 0
+            mean_mae = sum(metrics['mae_percent']) / len(metrics['mae_percent']) if metrics['mae_percent'] else 0
+
+            print(f"\n  {label_name}:")
+            print(f"    RMSE: {mean_rmse:.4f} Nm/kg (n={len(metrics['rmse'])})")
+            print(f"    R²: {mean_r2:.4f} (n={len(metrics['r2'])})")
+            print(f"    MAE: {mean_mae:.2f}% (n={len(metrics['mae_percent'])})")
+
+    print("\n" + "=" * 80 + "\n")
+
+def create_boxplots(
+        category_metrics: Dict,
+        label_names: List[str],
+        save_dir: str,
+        categories_to_plot: List[str] = ['Cyclic', 'Impedance-like', 'Unstructured']
+):
+    """
+    创建分面箱线图
+
+    参数:
+        category_metrics: 类别指标字典
+        label_names: 标签名称列表
+        save_dir: 保存目录
+        categories_to_plot: 要绘制的类别列表
+    """
+    # 定义指标的显示名称和单位
+    metric_info = {
+        'rmse': {'name': 'RMSE', 'unit': 'Nm/kg', 'ylabel': 'RMSE (Nm/kg)'},
+        'r2': {'name': 'R²', 'unit': '', 'ylabel': 'R²'},
+        'mae_percent': {'name': 'MAE', 'unit': '%', 'ylabel': 'Normalized MAE (%)'}
+    }
+
+    # 简化标签名称用于显示
+    label_display_names = {
+        "hip_flexion_r_moment": "Hip",
+        "knee_angle_r_moment": "Knee",
+        "hip_flexion_l_moment": "Hip",
+        "knee_angle_l_moment": "Knee"
+    }
+
+    for label_idx, label_name in enumerate(label_names):
+        # 为每个输出通道创建一个图
+        fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+        fig.suptitle(f'{label_display_names.get(label_name, label_name)} Moment Prediction',
+                     fontsize=16, fontweight='bold')
+
+        for metric_idx, (metric_key, metric_data) in enumerate(metric_info.items()):
+            ax = axes[metric_idx]
+
+            # 收集数据
+            data_to_plot = []
+            positions = []
+            labels = []
+
+            for cat_idx, category in enumerate(categories_to_plot):
+                if category in category_metrics and label_name in category_metrics[category]:
+                    values = category_metrics[category][label_name].get(metric_key, [])
+                    if values:
+                        data_to_plot.append(values)
+                        positions.append(cat_idx + 1)
+                        labels.append(category)
+
+            if not data_to_plot:
+                ax.text(0.5, 0.5, 'No Data', ha='center', va='center', transform=ax.transAxes)
+                ax.set_title(metric_data['name'])
+                continue
+
+            # 创建箱线图
+            bp = ax.boxplot(data_to_plot, positions=positions, widths=0.6,
+                            patch_artist=True, showfliers=True,
+                            boxprops=dict(facecolor='lightblue', edgecolor='black', linewidth=1.5),
+                            medianprops=dict(color='black', linewidth=2),
+                            whiskerprops=dict(color='black', linewidth=1.5),
+                            capprops=dict(color='black', linewidth=1.5),
+                            flierprops=dict(marker='o', markerfacecolor='gray', markersize=4,
+                                            linestyle='none', markeredgecolor='gray'))
+
+            # 添加均值标记（黑色方块）
+            for i, values in enumerate(data_to_plot):
+                mean_val = sum(values) / len(values)
+                ax.plot(positions[i], mean_val, marker='s', markersize=6,
+                        color='black', zorder=3)
+
+            # 设置标题和标签
+            ax.set_title(metric_data['name'], fontsize=14, fontweight='bold')
+            ax.set_ylabel(metric_data['ylabel'], fontsize=12)
+            ax.set_xticks(positions)
+            ax.set_xticklabels(labels, fontsize=11)
+            ax.grid(axis='y', alpha=0.3, linestyle='--')
+
+            # 为R²添加灰色背景
+            if metric_key == 'r2':
+                ax.set_facecolor('#f0f0f0')
+
+        plt.tight_layout()
+
+        # 保存图片
+        save_path = os.path.join(save_dir, f'boxplot_{label_name}_{"-".join(categories_to_plot)}.png')
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"箱线图已保存: {save_path}")
+        plt.close()
+
+def save_metrics_to_file(category_metrics: Dict, label_names: List[str], save_dir: str):
+    """将指标保存到文本文件"""
+    save_path = os.path.join(save_dir, 'test_results_by_category.txt')
+
+    with open(save_path, 'w') as f:
+        f.write("=" * 80 + "\n")
+        f.write("按类别统计的测试结果\n")
+        f.write("=" * 80 + "\n\n")
+
+        # 定义类别顺序
+        category_order = ['All', 'Cyclic', 'Impedance-like', 'Unstructured', 'Unseen']
+
+        for category in category_order:
+            if category not in category_metrics:
+                continue
+
+            f.write(f"【{category}】\n")
+            f.write("-" * 80 + "\n")
+
+            for label_name in label_names:
+                if label_name not in category_metrics[category]:
+                    continue
+
+                metrics = category_metrics[category][label_name]
+
+                # 计算均值和标准差
+                mean_rmse = sum(metrics['rmse']) / len(metrics['rmse']) if metrics['rmse'] else 0
+                std_rmse = (sum((x - mean_rmse) ** 2 for x in metrics['rmse']) / len(metrics['rmse'])) ** 0.5 if \
+                metrics['rmse'] else 0
+
+                mean_r2 = sum(metrics['r2']) / len(metrics['r2']) if metrics['r2'] else 0
+                std_r2 = (sum((x - mean_r2) ** 2 for x in metrics['r2']) / len(metrics['r2'])) ** 0.5 if metrics[
+                    'r2'] else 0
+
+                mean_mae = sum(metrics['mae_percent']) / len(metrics['mae_percent']) if metrics['mae_percent'] else 0
+                std_mae = (sum((x - mean_mae) ** 2 for x in metrics['mae_percent']) / len(
+                    metrics['mae_percent'])) ** 0.5 if metrics['mae_percent'] else 0
+
+                f.write(f"\n  {label_name}:\n")
+                f.write(f"    RMSE: {mean_rmse:.4f} ± {std_rmse:.4f} Nm/kg (n={len(metrics['rmse'])})\n")
+                f.write(f"    R²: {mean_r2:.4f} ± {std_r2:.4f} (n={len(metrics['r2'])})\n")
+                f.write(f"    MAE: {mean_mae:.2f} ± {std_mae:.2f}% (n={len(metrics['mae_percent'])})\n")
+
+            f.write("\n")
+
+        f.write("=" * 80 + "\n")
+
+    print(f"测试结果已保存到: {save_path}")
 
 if __name__ == '__main__':
 

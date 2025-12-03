@@ -199,7 +199,7 @@ batch_size = 8
 test_batch_size = 64
 
 # 学习率
-learning_rate = 0.001
+learning_rate = 0.0001
 
 # 权重衰减(L2正则化系数)
 weight_decay = 1e-5
