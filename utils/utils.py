@@ -1,3 +1,5 @@
+import sys
+sys.path.insert(0, '.')
 import os
 import shutil
 from typing import List, Tuple, Dict
@@ -346,11 +348,6 @@ def copy_config_file(config_path: str, save_dir: str):
 
         # 情况2: configs/TCN/default_config.py (已经是正确路径)
         possible_paths.append(config_path)
-
-        # 情况3: 如果包含点，尝试将.py前的最后一个点替换为/
-        if "." in path_without_py:
-            parts = path_without_py.split(".")
-            possible_paths.append(os.path.join(*parts) + ".py")
 
     # 去重
     possible_paths = list(dict.fromkeys(possible_paths))
@@ -708,23 +705,25 @@ def compute_category_metrics(
 
 if __name__ == '__main__':
 
-    from types import SimpleNamespace
+    # from types import SimpleNamespace
+    #
+    # config = SimpleNamespace()
+    #
+    # # config 对象
+    # config.input_size = 10
+    # config.output_size = 5
+    # config.d_model = 512
+    # config.transformer_dropout = 0.2
+    #
+    # # checkpoint 内容（可能包含部分覆盖参数）
+    # checkpoint = {
+    #     'input_size': 12,  # 覆盖config中的值
+    #     # 没有output_size，使用config默认值
+    #     'd_model': 256  # 覆盖config中的值
+    # }
+    #
+    # # 调用函数
+    # # model = create_model_from_config('Transformer', None, config, 'cpu')
+    # model = create_model_from_config('Transformer', checkpoint, config, 'cpu')
 
-    config = SimpleNamespace()
-
-    # config 对象
-    config.input_size = 10
-    config.output_size = 5
-    config.d_model = 512
-    config.transformer_dropout = 0.2
-
-    # checkpoint 内容（可能包含部分覆盖参数）
-    checkpoint = {
-        'input_size': 12,  # 覆盖config中的值
-        # 没有output_size，使用config默认值
-        'd_model': 256  # 覆盖config中的值
-    }
-
-    # 调用函数
-    # model = create_model_from_config('Transformer', None, config, 'cpu')
-    model = create_model_from_config('Transformer', checkpoint, config, 'cpu')
+    copy_config_file('configs.TCN.default_config.py', '.')

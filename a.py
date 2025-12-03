@@ -146,77 +146,80 @@ scale = torch.tensor([[6.4029e+01],
 # else:
 #     print("张量数据正常")
 
-# 验证加载模型功能
-def load_model(model_path: str, device: torch.device):
-    """加载训练好的模型"""
-    print(f"加载模型: {model_path}")
-    checkpoint = torch.load(model_path, map_location=device)
+# # 验证加载模型功能
+# def load_model(model_path: str, device: torch.device):
+#     """加载训练好的模型"""
+#     print(f"加载模型: {model_path}")
+#     checkpoint = torch.load(model_path, map_location=device)
+#
+#     model_type = checkpoint.get("model_type", "TCN")
+#     print(f"模型类型: {model_type}")
+#
+#     if model_type == "GenerativeTransformer":
+#         model = GenerativeTransformer(
+#             input_size=checkpoint["input_size"],
+#             output_size=checkpoint["output_size"],
+#             d_model=checkpoint["d_model"],
+#             nhead=checkpoint["nhead"],
+#             num_encoder_layers=checkpoint["num_encoder_layers"],
+#             num_decoder_layers=checkpoint["num_decoder_layers"],
+#             dim_feedforward=checkpoint["dim_feedforward"],
+#             dropout=checkpoint["dropout"],
+#             sequence_length=checkpoint["sequence_length"],
+#             encoder_type=checkpoint["encoder_type"],
+#             use_positional_encoding=checkpoint["use_positional_encoding"],
+#             center=checkpoint["center"],
+#             scale=checkpoint["scale"]
+#         ).to(device)
+#     elif model_type == "Transformer":
+#         model = PredictorTransformer(
+#             input_size=checkpoint["input_size"],
+#             output_size=checkpoint["output_size"],
+#             d_model=checkpoint["d_model"],
+#             nhead=checkpoint["nhead"],
+#             num_encoder_layers=checkpoint["num_encoder_layers"],
+#             dim_feedforward=checkpoint["dim_feedforward"],
+#             dropout=checkpoint["dropout"],
+#             sequence_length=checkpoint["sequence_length"],
+#             output_sequence_length=checkpoint["output_sequence_length"],
+#             use_positional_encoding=checkpoint["use_positional_encoding"],
+#             center=checkpoint["center"],
+#             scale=checkpoint["scale"]
+#         ).to(device)
+#     else:  # TCN
+#         model = TCN(
+#             input_size=checkpoint["input_size"],
+#             output_size=checkpoint["output_size"],
+#             num_channels=checkpoint["num_channels"],
+#             ksize=checkpoint["ksize"],
+#             dropout=checkpoint["dropout"],
+#             eff_hist=checkpoint["eff_hist"],
+#             spatial_dropout=checkpoint["spatial_dropout"],
+#             activation=checkpoint["activation"],
+#             norm=checkpoint["norm"],
+#             center=checkpoint["center"],
+#             scale=checkpoint["scale"]
+#         ).to(device)
+#
+#     state_dict = checkpoint['state_dict']
+#     # 打印模型参数信息
+#     total_params = sum(p.numel() for p in state_dict.values())
+#     print(f"✓ 模型参数总数: {total_params:,}")
+#     print("✓ 参数形状:")
+#     for key, value in list(state_dict.items())[:5]:  # 只显示前5个
+#         print(f"  {key}: {value.shape}")
+#         print(f"  {key}: {value}")
+#     if len(state_dict) > 5:
+#         print(f"  ... 还有 {len(state_dict) - 5} 个参数")
+#
+#     model.load_state_dict(checkpoint["state_dict"])
+#     print(f"模型加载成功! Epoch: {checkpoint.get('epoch', 'N/A')}")
+#
+#     return model, model_type
+#
+# # 加载模型
+# model, model_type = load_model('logs/trained_tcn_default_config/2/best_model.tar', 'cpu')
+# # model, model_type = load_model('logs/trained_tcn_default_config/2/model_epoch_1.tar', 'cpu')
 
-    model_type = checkpoint.get("model_type", "TCN")
-    print(f"模型类型: {model_type}")
-
-    if model_type == "GenerativeTransformer":
-        model = GenerativeTransformer(
-            input_size=checkpoint["input_size"],
-            output_size=checkpoint["output_size"],
-            d_model=checkpoint["d_model"],
-            nhead=checkpoint["nhead"],
-            num_encoder_layers=checkpoint["num_encoder_layers"],
-            num_decoder_layers=checkpoint["num_decoder_layers"],
-            dim_feedforward=checkpoint["dim_feedforward"],
-            dropout=checkpoint["dropout"],
-            sequence_length=checkpoint["sequence_length"],
-            encoder_type=checkpoint["encoder_type"],
-            use_positional_encoding=checkpoint["use_positional_encoding"],
-            center=checkpoint["center"],
-            scale=checkpoint["scale"]
-        ).to(device)
-    elif model_type == "Transformer":
-        model = PredictorTransformer(
-            input_size=checkpoint["input_size"],
-            output_size=checkpoint["output_size"],
-            d_model=checkpoint["d_model"],
-            nhead=checkpoint["nhead"],
-            num_encoder_layers=checkpoint["num_encoder_layers"],
-            dim_feedforward=checkpoint["dim_feedforward"],
-            dropout=checkpoint["dropout"],
-            sequence_length=checkpoint["sequence_length"],
-            output_sequence_length=checkpoint["output_sequence_length"],
-            use_positional_encoding=checkpoint["use_positional_encoding"],
-            center=checkpoint["center"],
-            scale=checkpoint["scale"]
-        ).to(device)
-    else:  # TCN
-        model = TCN(
-            input_size=checkpoint["input_size"],
-            output_size=checkpoint["output_size"],
-            num_channels=checkpoint["num_channels"],
-            ksize=checkpoint["ksize"],
-            dropout=checkpoint["dropout"],
-            eff_hist=checkpoint["eff_hist"],
-            spatial_dropout=checkpoint["spatial_dropout"],
-            activation=checkpoint["activation"],
-            norm=checkpoint["norm"],
-            center=checkpoint["center"],
-            scale=checkpoint["scale"]
-        ).to(device)
-
-    state_dict = checkpoint['state_dict']
-    # 打印模型参数信息
-    total_params = sum(p.numel() for p in state_dict.values())
-    print(f"✓ 模型参数总数: {total_params:,}")
-    print("✓ 参数形状:")
-    for key, value in list(state_dict.items())[:5]:  # 只显示前5个
-        print(f"  {key}: {value.shape}")
-        print(f"  {key}: {value}")
-    if len(state_dict) > 5:
-        print(f"  ... 还有 {len(state_dict) - 5} 个参数")
-
-    model.load_state_dict(checkpoint["state_dict"])
-    print(f"模型加载成功! Epoch: {checkpoint.get('epoch', 'N/A')}")
-
-    return model, model_type
-
-# 加载模型
-model, model_type = load_model('logs/trained_tcn_default_config/2/best_model.tar', 'cpu')
-# model, model_type = load_model('logs/trained_tcn_default_config/2/model_epoch_1.tar', 'cpu')
+a=None
+print(a is None)

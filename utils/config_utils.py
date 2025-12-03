@@ -38,14 +38,6 @@ def apply_feature_selection(config):
 		print("特征选择未启用，使用所有特征")
 		return config
 
-	# 检查是否有选择的特征索引
-	if not hasattr(config, 'selected_feature_indices') or \
-			config.selected_feature_indices is None or \
-			len(config.selected_feature_indices) == 0:
-		print("未指定特征索引，使用所有特征")
-		config.enable_feature_selection = False
-		return config
-
 	# 获取选择的索引
 	selected_indices = config.selected_feature_indices
 

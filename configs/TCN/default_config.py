@@ -17,6 +17,12 @@ data_dir = 'data'
 # 使用的身体侧别 (l: 左侧, r: 右侧)
 side = "r"
 
+# ==================== Activity Flag 配置 ====================
+# 是否启用activity_flag掩码功能
+# True: 读取activity_flag.csv文件，只在掩码为1的位置计算损失和指标
+# False: 不使用activity_flag，在所有位置计算损失和指标
+activity_flag = True
+
 # 模型输入特征名称(* 会被替换为 side)
 input_names = [
     "foot_imu_*_gyro_x", "foot_imu_*_gyro_y", "foot_imu_*_gyro_z",
@@ -29,6 +35,49 @@ input_names = [
     "hip_angle_*", "hip_angle_*_velocity_filt",
     "knee_angle_*", "knee_angle_*_velocity_filt"
 ]
+
+# ==================== 运动类型筛选配置 ====================
+
+# 是否启用基于action_patterns的数据筛选
+# True: 只使用action_patterns中指定的运动类型
+# False: 使用所有可用的数据文件（忽略action_patterns）
+enable_action_filter = False
+
+# 运动类型筛选模式（使用正则表达式）
+# 注释掉某一行可以排除该运动类型
+# 每行可以包含多个正则表达式，用逗号分隔
+action_patterns = [
+	# === 按论文中重要性排序的动作筛选 ===
+	r"^normal_walk_.*_(shuffle|0-6|1-2|1-8).*",  # 1. Level ground walk
+	r"^poses_.*",  # 2. Standing poses
+	r"^dynamic_walk_.*(high-knees|butt-kicks).*", r"^normal_walk_.*skip.*", r"^tire_run_.*",  # 3. Calisthenics
+	r"^push_.*",  # 4. Push and pull recovery
+	r"^jump_.*_(hop|vertical|180|90-f|90-s).*",  # 5. Jump in place
+	r"^turn_and_step_.*",  # 6. Turns
+	r"^cutting_.*",  # 7. Cut
+	r"^sit_to_stand_.*",  # 8. Sit and stand
+	r"^walk_backward_.*",  # 9. Backwards walk
+	r"^weighted_walk_.*",  # 10. 25 lb Loaded walk
+	r"^lift_weight_.*",  # 11. Lift and place weight
+	r"^tug_of_war_.*",  # 12. Tug of war
+	r"^jump_.*_(fb|lateral).*", r"^side_shuffle_.*",  # 13. Jump across
+	r"^normal_walk_.*_(2-0|2-5).*",  # 14. Run
+	r"^dynamic_walk_.*(toe-walk|heel-walk).*",  # 15. Toe and heel walk
+	r"^twister_.*",  # 16. Twister
+	r"^meander_.*",  # 17. Meander
+	r"^incline_walk_.*up.*",  # 18. Inclined walk
+	r"^stairs_.*down.*",  # 19. Stair descent
+	r"^lunges_.*",  # 20. Lunge
+	r"^stairs_.*up.*",  # 21. Stair ascent
+	r"^incline_walk_.*down.*",  # 22. Declined walk
+	r"^start_stop_.*",  # 23. Start and stop
+	r"^ball_toss_.*",  # 24. Medicine ball toss
+	r"^obstacle_walk_.*",  # 25. Step over
+	r"^squats_.*",  # 26. Squat
+	r"^curb_.*",  # 27. Curb
+	r"^step_ups_.*",  # 28. Step up
+]
+
 
 # 模型输出(预测)的标签名称
 label_names = ["hip_flexion_*_moment", "knee_angle_*_moment"]

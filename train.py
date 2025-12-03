@@ -1,23 +1,22 @@
 import argparse
 import os
 import shutil
-from cgitb import enable
 from typing import List, Tuple, Dict
+import random
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
-from utils.config_utils import *
-from utils.utils import *
 from models.predictor_model import PredictorTransformer
 from models.generative_model import GenerativeTransformer
 from models.tcn import TCN
 from dataset_loaders.sequence_dataloader import SequenceDataset
 from dataset_loaders.dataloader import TcnDataset
+from utils.config_utils import *
+from utils.utils import *
 from datetime import datetime
-import random
-import numpy as np
 
 # 解析命令行参数
 parser = argparse.ArgumentParser()
@@ -35,36 +34,8 @@ args = parser.parse_args()
 config = load_config(args.config_path)
 config = apply_feature_selection(config)
 
-def create_model(config, device: torch.device, resume_path: str = None) -> Tuple[nn.Module, int]:
-    """创建或加载模型"""
-    model_type = config.model_type
-
-    if resume_path and os.path.exists(resume_path):
-        print(f"从检查点恢复训练: {resume_path}")
-        checkpoint = torch.load(resume_path, map_location=device)
-        start_epoch = checkpoint.get("epoch", 0) + 1
-
-        # 根据模型类型创建模型
-        model = create_model_from_config(model_type, checkpoint, config, device)
-
-        model.load_state_dict(checkpoint["state_dict"])
-        print(f"模型已加载,从第 {start_epoch} 轮继续训练")
-    else:
-        print(f"创建新的{model_type}模型")
-        model = create_model_from_config(model_type, None, config, device)
-        start_epoch = 0
-        print(f"新模型已创建，参数数量: {sum(p.numel() for p in model.parameters()):,}")
-
-    return model, start_epoch
-
-
-def validate(model: nn.Module,
-             dataloader: DataLoader,
-             label_names: List[str],
-             device: torch.device,
-             model_type: str,
-             config,
-             reconstruction_method: str = "only_first") -> Tuple[dict, float]:
+def validate(model: nn.Module, dataloader: DataLoader, label_names: List[str], device: torch.device, model_type: str,
+             config, reconstruction_method: str = "only_first") -> Tuple[dict, float]:
     """
     验证函数 - 在完整序列上计算指标
 
@@ -82,24 +53,36 @@ def validate(model: nn.Module,
         if model_type == 'TCN':
             # TCN: 逐试验处理长序列
             # 初始化指标累积器
-            metrics_accumulator = {
-                f"output_{i}": {"rmse": 0.0, "r2": 0.0, "mae_percent": 0.0, "count": 0}
-                for i in range(num_outputs)
-            }
+            metrics_accumulator = {f"output_{i}": {"rmse": 0.0, "r2": 0.0, "mae_percent": 0.0, "count": 0}
+                                   for i in range(num_outputs)}
 
             for batch_data in dataloader:
-                input_data, label_data, trial_lengths = batch_data
+                # input_data,尺寸为[B,C,N],label_data,尺寸为[B,N_label,N],trial_lengths,列表,包含B个值，表示每个trial的原始长度,activity_masks,列表，列表，包含B个tensor，表示每个trial的activity_mask,尺寸为[n]
+                input_data, label_data, trial_lengths, activity_masks = batch_data
                 input_data = input_data.to(device)
                 label_data = label_data.to(device)
 
+                mask_flag = True if activity_masks[0] is not None else False
+
+                if mask_flag:
+                    activity_masks = [m.to(device) for m in activity_masks]
+
+                # 尺寸为[B,,N_label,N]
                 estimates = model(input_data)
 
                 model_history = model.get_effective_history()
                 batch_size = estimates.size(0)
 
                 for i in range(batch_size):
+                    # 尺寸为[N_label,n]
                     est_trial = estimates[i, :, model_history:trial_lengths[i]]
+                    # 尺寸为[N_label,n]
                     lbl_trial = label_data[i, :, model_history:trial_lengths[i]]
+
+                    # 获取activity_mask
+                    if mask_flag:
+                        # 尺寸为[n]
+                        act_mask_trial = activity_masks[i][model_history:]
 
                     # 找到最大delay，以此确定所有通道的统一有效长度
                     max_delay = max(config.model_delays)
@@ -128,17 +111,26 @@ def validate(model: nn.Module,
 
                         valid_mask_j = ~torch.isnan(est_j) & ~torch.isnan(lbl_j)
 
+                        # 应用activity掩码
+                        if mask_flag:
+                            act_mask_j = act_mask_trial[max_delay:]
+                            valid_mask_j = valid_mask_j & (act_mask_j == 1)
+
+                        # 包含num_outputs个tensor，尺寸为[n-delay]
                         est_shifted.append(est_j)
+                        # 包含num_outputs个tensor，尺寸为[n-delay]
                         lbl_shifted.append(lbl_j)
+                        # 包含num_outputs个tensor，尺寸为[n-delay]
                         valid_masks.append(valid_mask_j)
 
+                    # 尺寸为[num_outputs,n-delay]
                     est_stacked = torch.stack(est_shifted)
+                    # 尺寸为[num_outputs,n-delay]
                     lbl_stacked = torch.stack(lbl_shifted)
+                    # 尺寸为[num_outputs,n-delay]
                     mask_stacked = torch.stack(valid_masks)
 
-                    trial_metrics = compute_metrics_tcn_trial(
-                        est_stacked, lbl_stacked, mask_stacked, num_outputs
-                    )
+                    trial_metrics = compute_metrics_tcn_trial(est_stacked, lbl_stacked, mask_stacked, num_outputs)
 
                     # 累积指标
                     for j in range(num_outputs):
@@ -233,42 +225,10 @@ def validate(model: nn.Module,
     model.train()
     return result_dict, avg_loss
 
-
-def save_model(model: nn.Module, save_dir: str, epoch: int, config,
-               optimizer: optim.Optimizer = None,
-               scheduler: ReduceLROnPlateau = None):
-    """保存模型检查点"""
-
-    checkpoint = {
-        "state_dict": model.state_dict(),
-        "epoch": epoch,
-        "model_type": config.model_type,
-        "input_size": config.input_size,
-        "output_size": config.output_size,
-        "center": config.center,
-        "scale": config.scale
-    }
-
-    # 利用MODEL_SPECIFIC_FIELDS动态添加模型特定参数
-    model_fields = MODEL_SPECIFIC_FIELDS.get(config.model_type, {})
-    for checkpoint_key, config_attr in model_fields.items():
-        checkpoint[checkpoint_key] = getattr(config, config_attr)
-
-    if optimizer is not None:
-        checkpoint["optimizer_state"] = optimizer.state_dict()
-    if scheduler is not None:
-        checkpoint["scheduler_state"] = scheduler.state_dict()
-
-    save_path = os.path.join(save_dir, f"model_epoch_{epoch}.tar")
-    torch.save(checkpoint, save_path)
-    print(f"模型已保存: {save_path}")
-
-
 def log_to_file(file_path: str, content: str):
     """将内容追加到日志文件"""
     with open(file_path, "a", encoding="utf-8") as f:
         f.write(content + "\n")
-
 
 def main():
     # 设置随机种子
@@ -310,7 +270,7 @@ def main():
     # 根据模型类型加载数据集
     if config.model_type in ["Transformer", "GenerativeTransformer"]:
         seq_len = config.gen_sequence_length if config.model_type == "GenerativeTransformer" else config.sequence_length
-        output_seq_len = getattr(config, 'output_sequence_length', seq_len)
+        output_seq_len = config.output_sequence_length
 
         print(f"\n加载{config.model_type}训练数据集...")
 
@@ -328,30 +288,25 @@ def main():
 
         collate_fn = collate_fn_generative if config.model_type == "GenerativeTransformer" else collate_fn_predictor
 
-        train_loader = DataLoader(
-            train_dataset,
-            batch_size=config.batch_size,
-            shuffle=True,
-            collate_fn=collate_fn,
-            num_workers=args.num_workers,
-            pin_memory=True if device.type == 'cuda' else False
-        )
+        train_loader = DataLoader(train_dataset,
+                                  batch_size=config.batch_size,
+                                  shuffle=True,
+                                  collate_fn=collate_fn,
+                                  num_workers=args.num_workers,
+                                  pin_memory=True if device.type == 'cuda' else False)
 
-        test_loader = DataLoader(
-            test_dataset,
-            batch_size=config.test_batch_size,
-            shuffle=False,
-            collate_fn=collate_fn,
-            num_workers=args.num_workers,
-            pin_memory=True if device.type == 'cuda' else False
-        )
+        test_loader = DataLoader(test_dataset,
+                                 batch_size=config.test_batch_size,
+                                 shuffle=False,
+                                 collate_fn=collate_fn,
+                                 num_workers=args.num_workers,
+                                 pin_memory=True if device.type == 'cuda' else False)
 
     else:  # TCN
         print(f"\n加载TCN训练数据集...")
 
-        tcn_kwargs = dict(data_dir=config.data_dir, input_names=input_names, label_names=label_names, side=config.side,
-                          participant_masses=config.participant_masses, device=device, load_to_device=False,
-                          action_patterns=getattr(config, 'action_patterns', None), enable_action_filter=getattr(config, 'enable_action_filter', False))
+        tcn_kwargs = dict(data_dir=config.data_dir, input_names=input_names, label_names=label_names, side=config.side, participant_masses=config.participant_masses, device=device,
+                          action_patterns=config.action_patterns, enable_action_filter=config.enable_action_filter, activity_flag=config.activity_flag)
 
         train_dataset = TcnDataset(mode='train', **tcn_kwargs)
 
@@ -420,6 +375,7 @@ def main():
         config.model_type, config, reconstruction_method
     )
 
+    initial_log_content = f"\n{'=' * 60}\n"
     initial_log_content += "=== 训练前初始验证结果 (Epoch 0) ===\n"
     initial_log_content += f"验证损失: {initial_loss:.6f}\n"
     print(f"\n验证损失: {initial_loss:.6f}")
@@ -511,17 +467,33 @@ def main():
                         break
 
             else:  # TCN
-                input_data, label_data, trial_lengths = batch_data
+                # input_data,尺寸为[B,C,N],label_data,尺寸为[B,N_label,N],trial_lengths,列表,包含B个值，表示每个trial的原始长度,activity_masks,列表，列表，包含B个tensor，表示每个trial的activity_mask,尺寸为[n]
+                input_data, label_data, trial_lengths, activity_masks = batch_data
                 input_data = input_data.to(device)
                 label_data = label_data.to(device)
+
+                mask_flag = True if activity_masks[0] is not None else False
+
+                # 处理activity_masks
+                if mask_flag:
+                    activity_masks = [m.to(device) for m in activity_masks]
+
                 estimates = model(input_data)
-                batch_losses = []
+                batch_est_list = []
+                batch_lbl_list = []
                 model_history = model.get_effective_history()
 
                 for i in range(len(trial_lengths)):
+                    # 尺寸为[N_label,n]
                     est_trial = estimates[i, :, model_history:trial_lengths[i]]
+                    # 尺寸为[N_label,n]
                     lbl_trial = label_data[i, :, model_history:trial_lengths[i]]
-                    # breakpoint()
+
+                    # 获取activity_mask
+                    if mask_flag:
+                        #尺寸为[n]
+                        act_mask_trial = activity_masks[i][model_history:]
+
                     # 找到最大delay
                     max_delay = max(config.model_delays)
                     valid_length = est_trial.size(1) - max_delay
@@ -534,14 +506,20 @@ def main():
                         delay = config.model_delays[j]
 
                         # 预测值：从max_delay位置开始取
+                        # 尺寸为[n]
                         est = est_trial[j, max_delay:]
 
                         # 标签：根据当前通道的delay进行偏移
                         lbl_start = max_delay - delay
                         lbl_end = lbl_start + valid_length
+                        # 尺寸为[n]
                         lbl = lbl_trial[j, lbl_start:lbl_end]
 
                         valid_mask = ~torch.isnan(est) & ~torch.isnan(lbl)
+                        if mask_flag:
+                            act_mask = act_mask_trial[max_delay:]
+                            valid_mask = valid_mask & (act_mask == 1)  # activity flag为1的位置
+
                         est_valid = est[valid_mask]
                         lbl_valid = lbl[valid_mask]
 
@@ -549,15 +527,19 @@ def main():
                         #     breakpoint()
 
                         if len(est_valid) > 0:
-                            # if torch.isnan(criterion(est_valid, lbl_valid)):
-                            #     print(f"NaN at trial={i}, channel={j}")
-                            batch_losses.append(criterion(est_valid, lbl_valid))
+                            batch_est_list.append(est_valid)
+                            batch_lbl_list.append(lbl_valid)
 
-                if len(batch_losses) > 0:
-                    loss = torch.stack(batch_losses).mean()
+                if len(batch_est_list) > 0:
+                    all_est = torch.cat(batch_est_list)
+                    all_lbl = torch.cat(batch_lbl_list)
+
+                    loss = criterion(all_est, all_lbl)
+
                     if torch.isnan(loss):
                         print("❌ Loss is NaN!")
                         breakpoint()
+
                     optimizer.zero_grad()
                     loss.backward()
                     torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
@@ -593,7 +575,6 @@ def main():
                 val_log_content += result_str + "\n"
 
             log_to_file(val_log_path, val_log_content)
-            print()
 
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
