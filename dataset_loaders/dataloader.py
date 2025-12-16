@@ -69,8 +69,8 @@ class TcnDataset(Dataset):
         # 获取试验名称列表
         self.trial_names = self._get_trial_names()
 
-        ## 测试,正式训练时改行需要注释
-        self.trial_names = self.trial_names[:10]
+        # ## 测试,正式训练时该行需要注释
+        # self.trial_names = self.trial_names[:10]
 
         # 统计信息
         self.nan_removal_stats = {
@@ -90,6 +90,7 @@ class TcnDataset(Dataset):
         self.trial_lengths = []  # 存储每个试验的原始长度
         self.all_activity_mask = []  # 存储所有试验的activity flag掩码
         self._preload_all_data()
+        breakpoint()
 
         # === 检测并移除标签全为NaN的序列 ===
         self._remove_invalid_label_sequences()

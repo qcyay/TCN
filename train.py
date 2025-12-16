@@ -161,6 +161,7 @@ def validate(model: nn.Module, dataloader: DataLoader, label_names: List[str], d
             # Transformer: 收集所有预测和标签，然后重组序列
             all_estimates = []
             all_labels = []
+            all_masks = [] if config.activity_flag else None
 
             for batch_idx, batch_data in enumerate(dataloader):
                 if model_type == 'GenerativeTransformer':
@@ -175,38 +176,54 @@ def validate(model: nn.Module, dataloader: DataLoader, label_names: List[str], d
                     estimates = model(input_data, shifted_label_data, tgt_mask)
 
                 else:
-                    input_data, label_data = batch_data
+                    # input_data,传感器数据,尺寸为[B,num_input_features, sequence_length],label_data,力矩真值,尺寸为[B,num_outputs,output_sequence_length],mask_data,动作掩码,尺寸为[B,num_outputs,output_sequence_length]
+                    input_data, label_data, mask_data = batch_data
                     input_data = input_data.to(device)
                     label_data = label_data.to(device)
+                    if mask_data is not None:
+                        mask_data = mask_data.to(device)
 
+                    # 尺寸为[B,num_outputs,output_sequence_length]
                     estimates = model(input_data)
 
                 all_estimates.append(estimates)
                 all_labels.append(label_data)
-
+                if mask_data is not None:
+                    all_masks.append(mask_data)
 
                 # 计算损失
                 valid_mask = ~torch.isnan(estimates) & ~torch.isnan(label_data)
+                if mask_data is not None:
+                    valid_mask = valid_mask & (mask_data == 1)
+
                 if valid_mask.sum() > 0:
                     loss = criterion(estimates[valid_mask], label_data[valid_mask])
                     total_loss += loss.item()
                     num_batches += 1
 
             # Concatenate所有批次的结果
+            # 尺寸为[N,num_input_features, sequence_length]
             all_estimates = torch.cat(all_estimates, dim=0)
+            # 尺寸为[N,num_outputs,output_sequence_length]
             all_labels = torch.cat(all_labels, dim=0)
+            if mask_data is not None:
+                # 尺寸为[N,num_outputs,output_sequence_length]
+                all_masks = torch.cat(all_masks, dim=0)
 
             # 使用优化的重组方法
             print(f"使用优化的 '{reconstruction_method}' 方法重组序列...")
-            reconstructed_estimates, reconstructed_labels = reconstruct_sequences(
-                all_estimates, all_labels,
+            # reconstructed_estimates,重组预测结果,列表,包含N个tensor,每个tensor的尺寸为[num_outputs,trial_len]
+            # reconstructed_labels,重组标签,列表,包含N个tensor,每个tensor的尺寸为[num_outputs,trial_len]
+            # reconstructed_masks,重组动作掩码,列表,包含N个tensor,每个tensor的尺寸为[num_outputs,trial_len]
+            reconstructed_estimates, reconstructed_labels, reconstructed_masks = reconstruct_sequences(
+                all_estimates, all_labels, all_masks,
                 dataloader.dataset.trial_sequence_counts,
                 method=reconstruction_method
             )
 
             # 在完整序列上计算指标
             metrics_accumulator = compute_metrics_on_sequences(
-                reconstructed_estimates, reconstructed_labels, num_outputs
+                reconstructed_estimates, reconstructed_labels, reconstructed_masks, num_outputs
             )
 
     # 计算平均
@@ -270,16 +287,15 @@ def main():
     # 根据模型类型加载数据集
     if config.model_type in ["Transformer", "GenerativeTransformer"]:
         seq_len = config.gen_sequence_length if config.model_type == "GenerativeTransformer" else config.sequence_length
-        output_seq_len = config.output_sequence_length
 
         print(f"\n加载{config.model_type}训练数据集...")
 
         sequence_kwargs = dict(data_dir=config.data_dir, input_names=input_names, label_names=label_names, side=config.side,
-                               sequence_length=seq_len, output_sequence_length=output_seq_len, model_delays=config.model_delays,
-                               participant_masses=config.participant_masses, device=device, mode_type=config.mode_type,
+                               sequence_length=seq_len, output_sequence_length=config.output_sequence_length, model_delays=config.model_delays,
+                               participant_masses=config.participant_masses, device=device, model_type=config.model_type,
                                start_token_value=config.start_token_value if config.model_type == "GenerativeTransformer" else 0.0,
                                remove_nan=True, action_patterns=getattr(config, 'action_patterns', None),
-                               enable_action_filter=getattr(config, 'enable_action_filter', False))
+                               enable_action_filter=getattr(config, 'enable_action_filter', False), activity_flag=config.activity_flag)
 
         train_dataset = SequenceDataset(mode='train', **sequence_kwargs)
 
@@ -444,13 +460,19 @@ def main():
                         break
 
             elif config.model_type == 'Transformer':
-                input_data, label_data = batch_data
+                # input_data,传感器数据,尺寸为[B,num_input_features,sequence_length],label_data,力矩真值,尺寸为[B,num_outputs,output_sequence_length],mask_data,动作掩码,尺寸为[B,num_outputs,output_sequence_length]
+                input_data, label_data, mask_data = batch_data
                 input_data = input_data.to(device)
                 label_data = label_data.to(device)
+                if mask_data is not None:
+                    mask_data = mask_data.to(device)
 
+                # 尺寸为[B,num_outputs,output_sequence_length]
                 estimates = model(input_data)
 
                 valid_mask = ~torch.isnan(estimates) & ~torch.isnan(label_data)
+                if mask_data is not None:
+                    valid_mask = valid_mask & (mask_data ==1)
                 if valid_mask.sum() > 0:
                     loss = criterion(estimates[valid_mask], label_data[valid_mask])
 

@@ -5,6 +5,7 @@ import re
 import shutil
 from typing import List, Tuple, Dict
 from collections import defaultdict
+from itertools import repeat
 import random
 import numpy as np
 import inspect
@@ -434,6 +435,7 @@ def copy_config_file(config_path: str, save_dir: str):
 def reconstruct_sequences(
         all_estimates: torch.Tensor,
         all_labels: torch.Tensor,
+        all_masks: torch.Tensor,
         trial_sequence_counts: List[int],
         method: str = "only_first"
 ) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
@@ -443,66 +445,73 @@ def reconstruct_sequences(
     参数:
         all_estimates: [N, num_outputs, output_seq_len] 所有短序列的预测（按trial顺序）
         all_labels: [N, num_outputs, output_seq_len] 所有短序列的标签（按trial顺序）
+        all_masks: [N, num_outputs, output_seq_len] 所有短序列的掩码（按trial顺序）
         trial_sequence_counts: List[int] 每个trial的子序列数量
         method: 重组方法 'only_first' 或 'average'
 
     返回:
         reconstructed_estimates: List[Tensor[num_outputs, trial_len]] 每个trial的完整序列预测
         reconstructed_labels: List[Tensor[num_outputs, trial_len]] 每个trial的完整序列标签
+        reconstructed_masks: List[Tensor[num_outputs, trial_len]] 每个trial的完整序列掩码
     """
     reconstructed_estimates = []
     reconstructed_labels = []
+    reconstructed_masks = [] if all_masks is not None else None
 
     # 按trial_sequence_counts分割预测和标签
     estimates_splits = torch.split(all_estimates, trial_sequence_counts, dim=0)
     labels_splits = torch.split(all_labels, trial_sequence_counts, dim=0)
-    # breakpoint()
+    masks_splits = torch.split(all_masks, trial_sequence_counts, dim=0) if all_masks is not None else repeat(None)
+
+    # 对于标签和掩码，每组只取第一个时间步（索引0），然后沿着时间维度拼接
+    for trial_lbl, trial_mask in zip(labels_splits, masks_splits):
+        # trial_lbl: [num_subsequences, num_outputs, output_seq_len]
+        # 取每个子序列的第一个值: [:, :, 0] -> [num_subsequences, num_outputs]
+        # 转置得到: [num_outputs, num_subsequences]
+        reconstructed_labels.append(trial_lbl[:, :, 0].t().contiguous())
+        if trial_mask is not None:
+            reconstructed_masks.append(trial_mask[:, :, 0].t().contiguous())
 
     if method == "only_first":
         # 每组只取第一个时间步（索引0），然后沿着时间维度拼接
-        for trial_est, trial_lbl in zip(estimates_splits, labels_splits):
+        for trial_est in estimates_splits:
             # trial_est: [num_subsequences, num_outputs, output_seq_len]
             # 取每个子序列的第一个值: [:, :, 0] -> [num_subsequences, num_outputs]
             # 转置得到: [num_outputs, num_subsequences]
             reconstructed_estimates.append(trial_est[:, :, 0].t().contiguous())
-            reconstructed_labels.append(trial_lbl[:, :, 0].t().contiguous())
 
     elif method == "average":
         # 使用unfold展开然后平均的方式
-        for trial_est, trial_lbl in zip(estimates_splits, labels_splits):
+        for trial_est in estimates_splits:
             # trial_est: [num_subsequences, num_outputs, output_seq_len]
             num_subseqs, num_outputs, output_seq_len = trial_est.shape
 
-            # 完整序列长度 = 子序列数量 + output_seq_len - 1
-            # （因为最后一个子序列也会预测output_seq_len个点）
-            full_len = num_subseqs + output_seq_len - 1
+            # # 完整序列长度 = 子序列数量 + output_seq_len - 1
+            # # （因为最后一个子序列也会预测output_seq_len个点）
+            # full_len = num_subseqs + output_seq_len - 1
 
             # 为每个输出通道分别处理
-            est_full = torch.zeros(num_outputs, full_len, device=trial_est.device)
-            lbl_full = torch.zeros(num_outputs, full_len, device=trial_lbl.device)
-            count = torch.zeros(num_outputs, full_len, device=trial_est.device)
+            est_full = torch.zeros(num_outputs, num_subseqs, device=trial_est.device)
+            count = torch.zeros(num_outputs, num_subseqs, device=trial_est.device)
 
             # 生成索引矩阵用于累加
             # 每个子序列i对应的位置是 i, i+1, ..., i+output_seq_len-1
             for i in range(num_subseqs):
                 # 对应的位置索引
-                positions = torch.arange(i, i + output_seq_len, device=trial_est.device)
+                positions = torch.arange(i, min(i + output_seq_len, num_subseqs), device=trial_est.device)
                 # 使用scatter_add累加
                 est_full.index_add_(1, positions, trial_est[i])
-                lbl_full.index_add_(1, positions, trial_lbl[i])
-                count.index_add_(1, positions, torch.ones(num_outputs, output_seq_len, device=trial_est.device))
+                count.index_add_(1, positions, torch.ones(num_outputs, positions.size(0), device=trial_est.device))
 
             # 计算平均值
             est_avg = est_full / count
-            lbl_avg = lbl_full / count
 
             reconstructed_estimates.append(est_avg)
-            reconstructed_labels.append(lbl_avg)
 
     else:
         raise ValueError(f"未知的重组方法: {method}")
 
-    return reconstructed_estimates, reconstructed_labels
+    return reconstructed_estimates, reconstructed_labels, reconstructed_masks
 
 def categorize_trial(trial_name: str, action_to_category: Dict[str, str]) -> str:
     """
@@ -548,6 +557,7 @@ def check_unseen_task(trial_name: str, unseen_patterns: List[str]) -> bool:
 def compute_metrics_on_sequences(
         estimates_list: List[torch.Tensor],
         labels_list: List[torch.Tensor],
+        masks_list: List[torch.Tensor],
         num_outputs: int
 ) -> Dict:
     """
@@ -556,12 +566,14 @@ def compute_metrics_on_sequences(
     参数:
         estimates_list: List[Tensor[num_outputs, seq_len]] 每个trial的预测序列
         labels_list: List[Tensor[num_outputs, seq_len]] 每个trial的标签序列
+        masks_list: List[Tensor[num_outputs, seq_len]] 每个trial的动作掩码序列
         num_outputs: 输出通道数
 
     返回:
         metrics: 包含每个输出通道指标的字典
     """
     metrics = {}
+    masks_list = masks_list if masks_list is not None else repeat(None)
 
     for j in range(num_outputs):
         rmse_sum = 0.0
@@ -569,12 +581,16 @@ def compute_metrics_on_sequences(
         mae_percent_sum = 0.0
         count = 0
 
-        for est_seq, lbl_seq in zip(estimates_list, labels_list):
+        for est_seq, lbl_seq, mask_seq in zip(estimates_list, labels_list, masks_list):
             est = est_seq[j]  # [seq_len]
             lbl = lbl_seq[j]  # [seq_len]
+            if mask_seq is not None:
+                mask = mask_seq[j] # [seq_len]
 
             # 创建有效数据掩码
             valid_mask = ~torch.isnan(est) & ~torch.isnan(lbl)
+            if mask_seq is not None:
+                valid_mask = valid_mask & (mask == 1)
 
             if valid_mask.sum() == 0:
                 continue

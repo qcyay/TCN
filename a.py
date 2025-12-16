@@ -221,5 +221,10 @@ scale = torch.tensor([[6.4029e+01],
 # model, model_type = load_model('logs/trained_tcn_default_config/2/best_model.tar', 'cpu')
 # # model, model_type = load_model('logs/trained_tcn_default_config/2/model_epoch_1.tar', 'cpu')
 
-a=None
-print(a is None)
+positions = torch.arange(i, min(i + output_seq_len, full_len), device=trial_est.device)
+valid_length = len(positions)  # 直接获取有效长度
+
+# 使用有效的子序列部分
+est_full.index_add_(1, positions, trial_est[i, :, :valid_length])
+lbl_full.index_add_(1, positions, trial_lbl[i, :, :valid_length])
+count.index_add_(1, positions, torch.ones(num_outputs, valid_length, device=trial_est.device))

@@ -70,7 +70,6 @@ class SequenceDataset(Dataset):
         self.action_patterns = action_patterns
         self.enable_action_filter = enable_action_filter
         self.activity_flag = activity_flag
-        self.all_activity_mask = []  # 存储所有试验的activity flag掩码
 
         # 设置文件后缀映射
         if file_suffix is None:
@@ -104,6 +103,7 @@ class SequenceDataset(Dataset):
         # 预加载所有数据到内存
         self.all_input_data = []  # 存储所有试验的输入数据
         self.all_label_data = []  # 存储所有试验的标签数据
+        self.all_mask_data = []  # 存储所有试验的activity flag掩码
         self._preload_all_data()
 
         # === 检测并移除标签全为NaN的序列 ===
@@ -136,7 +136,7 @@ class SequenceDataset(Dataset):
             - input_data: [num_input_features, sequence_length]
             - label_data: [num_label_features, output_sequence_length]
                          注意：每个输出通道根据model_delays[i]从不同位置开始
-            - mask:[output_sequence_length]
+            - mask:[num_label_features, output_sequence_length]
 
         对于GenerativeTransformer:
             返回: (input_data, shifted_label_data, label_data)
@@ -149,13 +149,14 @@ class SequenceDataset(Dataset):
         trial_idx, input_start_idx = self.sequences[idx]
 
         # 提取输入序列
+        # 尺寸为[num_input_features, sequence_length]
         input_seq = self.all_input_data[trial_idx][:, input_start_idx:input_start_idx + self.sequence_length]
 
         # 提取标签序列 - 每个输出通道根据其delay分别提取
         num_outputs = len(self.model_delays)
         label_data = self.all_label_data[trial_idx]
         if self.activity_flag:
-            mask_data = self.all_activity_mask[trial_idx]
+            mask_data = self.all_mask_data[trial_idx]
 
         # 为每个输出通道创建标签序列
         label_seqs = []
@@ -333,13 +334,14 @@ class SequenceDataset(Dataset):
                 print(f"  加载进度: {trial_idx + 1}/{len(self.trial_names)}")
 
             # 加载单个试验数据
-            input_data, label_data, activity_mask = self._load_trial_data(trial_name)
+            # input_data,输入传感器数据,尺寸为[C,N],label_data,尺寸为[2,N],mask_data,数据掩码,尺寸为[N]
+            input_data, label_data, mask_data = self._load_trial_data(trial_name)
+            # breakpoint()
 
             # 转换为numpy数组并存储
             self.all_input_data.append(input_data.numpy())
             self.all_label_data.append(label_data.numpy())
-            if activity_mask is not None:
-                self.all_activity_mask.append(activity_mask.numpy())
+            self.all_mask_data.append(mask_data.numpy())
 
         print("所有数据预加载完成!")
 
@@ -378,7 +380,7 @@ class SequenceDataset(Dataset):
             self.trial_names = [self.trial_names[i] for i in valid_indices]
             self.all_input_data = [self.all_input_data[i] for i in valid_indices]
             self.all_label_data = [self.all_label_data[i] for i in valid_indices]
-            self.all_activity_mask = [self.all_activity_mask[i] for i in valid_indices]
+            self.all_mask_data = [self.all_mask_data[i] for i in valid_indices]
 
             print(f"  移除完成，剩余 {len(self.trial_names)} 个有效试验")
         else:
@@ -420,17 +422,16 @@ class SequenceDataset(Dataset):
         input_data, valid_range = self._load_input_data(input_file_path, body_mass)
         label_data = self._load_label_data(label_file_path, valid_range)
 
-        activity_mask = None
-        if self.activity_flag:
-            activity_filename = f"{file_prefix}{self.file_suffix['flag']}"
-            activity_file_path = os.path.join(trial_dir, activity_filename)
-            if os.path.exists(activity_file_path):
-                activity_mask = self._load_activity_flag(activity_file_path, valid_range)
-            else:
-                raise FileNotFoundError(f"activity_flag已启用但文件不存在: {activity_file_path}")
+        # 加载掩码
+        activity_filename = f"{file_prefix}{self.file_suffix['flag']}"
+        activity_file_path = os.path.join(trial_dir, activity_filename)
+        if os.path.exists(activity_file_path):
+            mask_data = self._load_activity_flag(activity_file_path, valid_range)
+        else:
+            raise FileNotFoundError(f"activity_flag已启用但文件不存在: {activity_file_path}")
 
         # 注意：不在这里应用延迟，延迟会在生成序列索引时处理
-        return input_data, label_data, activity_mask
+        return input_data, label_data, mask_data
 
     def _load_input_data(self, file_path: str, body_mass: float) -> Tuple[torch.Tensor, Optional[Tuple[int, int]]]:
         '''加载并预处理输入数据'''
@@ -537,7 +538,7 @@ class SequenceDataset(Dataset):
             # 获取该试验的数据长度
             input_len = self.all_input_data[trial_idx].shape[1]
             label_len = self.all_label_data[trial_idx].shape[1]
-            mask_len = self.all_activity_mask[trial_idx].shape[0]
+            mask_len = self.all_mask_data[trial_idx].shape[0]
 
             assert label_len == mask_len
 

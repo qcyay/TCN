@@ -18,6 +18,12 @@ data_dir = 'data/example'
 # 使用的身体侧别 (l: 左侧, r: 右侧)
 side = "r"
 
+# ==================== Activity Flag 配置 ====================
+# 是否启用activity_flag掩码功能
+# True: 读取activity_flag.csv文件，只在掩码为1的位置计算损失和指标
+# False: 不使用activity_flag，在所有位置计算损失和指标
+activity_flag = False
+
 # 模型输入特征名称(* 会被替换为 side)
 input_names = [
     "foot_imu_*_gyro_x", "foot_imu_*_gyro_y", "foot_imu_*_gyro_z",
