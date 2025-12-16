@@ -727,11 +727,11 @@ def compute_metrics_per_sequence(
 def compute_category_metrics(
         estimates_list: List[torch.Tensor],
         labels_list: List[torch.Tensor],
+        masks_list: List[torch.Tensor],
         trial_names: List[str],
         label_names: List[str],
         action_to_category: Dict[str, str],
         unseen_patterns: List[str],
-        masks_list: List[torch.Tensor] = None
 ) -> Dict:
     """
     计算各类别的指标
@@ -754,10 +754,9 @@ def compute_category_metrics(
     category_metrics = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
 
     # 根据masks_list是否为None创建迭代器
-    if masks_list is None:
-        masks_list = [None] * len(estimates_list)
+    masks_list = masks_list if masks_list is not None else repeat(None)
 
-    for est_seq, lbl_seq, trial_name, mask in zip(estimates_list, labels_list, trial_names, masks_list):
+    for est_seq, lbl_seq, mask_seq, trial_name in zip(estimates_list, labels_list, masks_list, trial_names):
         # 判断类别
         category = categorize_trial(trial_name, action_to_category)
 
@@ -768,6 +767,8 @@ def compute_category_metrics(
         for j, label_name in enumerate(label_names):
             est = est_seq[j]  # [seq_len]
             lbl = lbl_seq[j]  # [seq_len]
+            if mask_seq is not None:
+                mask = mask_seq[j] # [seq_len]
 
             metrics = compute_metrics_per_sequence(est, lbl, mask)
 

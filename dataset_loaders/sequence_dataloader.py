@@ -88,8 +88,8 @@ class SequenceDataset(Dataset):
         # 获取试验名称列表
         self.trial_names = self._get_trial_names()
 
-        ## 测试,正式训练时改行需要注释
-        self.trial_names = self.trial_names[:10]
+        # ## 测试,正式训练时改行需要注释
+        # self.trial_names = self.trial_names[:10]
 
         # 统计信息
         self.nan_removal_stats = {

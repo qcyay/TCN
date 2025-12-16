@@ -80,7 +80,6 @@ def main():
     # 根据模型类型加载数据集
     if model_type in ["Transformer", "GenerativeTransformer"]:
         seq_len = config.gen_sequence_length if model_type == "GenerativeTransformer" else config.sequence_length
-        output_seq_len = config.output_sequence_length
 
         print(f"\n加载{model_type}测试数据集...")
         test_dataset = SequenceDataset(
@@ -89,14 +88,17 @@ def main():
             label_names=label_names,
             side=config.side,
             sequence_length=seq_len,
-            output_sequence_length=output_seq_len,
+            output_sequence_length=config.output_sequence_length,
             model_delays=config.model_delays,
             participant_masses=config.participant_masses,
             device=device,
             mode='test',
             model_type=model_type,
             start_token_value=config.start_token_value if model_type == "GenerativeTransformer" else 0.0,
-            remove_nan=True
+            remove_nan=True,
+            action_patterns=getattr(config, 'action_patterns', None),
+            enable_action_filter=getattr(config, 'enable_action_filter', False),
+            activity_flag=config.activity_flag
         )
 
         collate_fn = collate_fn_generative if model_type == "GenerativeTransformer" else collate_fn_predictor
@@ -117,6 +119,7 @@ def main():
         # 进行测试 - 收集所有预测和标签
         all_estimates = []
         all_labels = []
+        all_masks = [] if config.activity_flag else None
 
         print("\n开始预测...")
         with torch.no_grad():
@@ -150,30 +153,40 @@ def main():
                         all_estimates.append(estimates)
                         all_labels.append(label_data)
             else:  # Transformer预测模型
-                for batch_idx, (input_data, label_data) in enumerate(test_loader):
+                for batch_idx, (input_data, label_data, mask_data) in enumerate(test_loader):
+                    # 尺寸为[B,num_input_features,sequence_length]
                     input_data = input_data.to(device)
+                    # 尺寸为[B,num_outputs,sequence_length]
                     label_data = label_data.to(device)
+                    if mask_data is not None:
+                        # 尺寸为[B,num_outputs,sequence_length]
+                        mask_data = mask_data.to(device)
 
+                    # 尺寸为[B,num_outputs,sequence_length]
                     estimates = model(input_data)
 
                     all_estimates.append(estimates)
                     all_labels.append(label_data)
+                    if mask_data is not None:
+                        all_masks.append(mask_data)
 
         # 合并所有批次的结果
         all_estimates = torch.cat(all_estimates, dim=0)
         all_labels = torch.cat(all_labels, dim=0)
+        if mask_data is not None:
+            all_masks = torch.cat(all_masks, dim=0)
 
         print(f"预测完成! 共 {all_estimates.size(0)} 个短序列")
 
         # 使用优化的重组方法
         print(f"\n使用 '{reconstruction_method}' 方法重组序列...")
-        reconstructed_estimates, reconstructed_labels = reconstruct_sequences(
-            all_estimates, all_labels,
+        all_estimates, all_labels, all_masks = reconstruct_sequences(
+            all_estimates, all_labels, all_masks,
             test_dataset.trial_sequence_counts,
             method=reconstruction_method
         )
 
-        print(f"重组完成! 共 {len(reconstructed_estimates)} 个完整序列")
+        print(f"重组完成! 共 {len(all_estimates)} 个完整序列")
 
         # 获取trial名称列表
         trial_names = test_dataset.trial_names
@@ -188,6 +201,9 @@ def main():
             participant_masses=config.participant_masses,
             device=device,
             mode='test',
+            remove_nan=True,
+            action_patterns=getattr(config, 'action_patterns', None),
+            enable_action_filter=getattr(config, 'enable_action_filter', False),
             activity_flag=config.activity_flag
         )
 
@@ -203,7 +219,7 @@ def main():
         # 进行测试 - 逐个处理并收集完整序列
         all_estimates = []
         all_labels = []
-        all_masks = []
+        all_masks = [] if config.activity_flag else None
 
         print("\n开始预测...")
         with torch.no_grad():
@@ -279,11 +295,11 @@ def main():
     category_metrics = compute_category_metrics(
         all_estimates,
         all_labels,
+        all_masks,
         trial_names,
         label_names,
         action_to_category,
         unseen_patterns,
-        all_masks
     )
 
     # 打印结果
@@ -383,11 +399,11 @@ def main():
             temp_metrics = compute_category_metrics(
                 all_estimates,
                 all_labels,
+                all_masks,
                 trial_names,
                 label_names,
                 temp_category_map,
-                [],  # 不考虑unseen
-                all_masks
+                []  # 不考虑unseen
             )
 
             # 如果有数据，创建箱线图
