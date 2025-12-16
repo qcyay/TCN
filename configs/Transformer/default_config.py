@@ -37,6 +37,11 @@ input_names = [
     "knee_angle_*", "knee_angle_*_velocity_filt"
 ]
 
+# ==================== 序列长度过滤配置 ====================
+# 允许加载的最小序列长度（单位：采样点，200Hz，每点=5ms）
+# -1 表示不限制序列长度（默认行为）
+min_sequence_length = -1
+
 # ==================== 特征选择配置 ====================
 # 是否启用特征选择（False时使用所有特征）
 enable_feature_selection = False
@@ -223,7 +228,7 @@ sequence_length = 200
 # 输出序列长度（预测或生成的序列长度）
 # 对于预测模型：决定预测的时间步数
 # 对于生成式模型：决定生成的时间步数
-output_sequence_length = 1
+output_sequence_length = 5
 
 # Transformer隐藏维度
 d_model = 128
@@ -269,7 +274,7 @@ teacher_forcing_ratio = 1.0
 # 'only_first': 每个短序列只取第一个预测值（推荐，速度快，接近实际使用）
 # 'average': 对每个位置的所有预测值取平均（结果更平滑，但计算慢）
 # 注意：TCN模型不使用此参数
-reconstruction_method = 'only_first'
+reconstruction_method = 'average'
 
 # ==================== 训练配置 ====================
 

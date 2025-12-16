@@ -11,7 +11,7 @@ import numpy as np
 class TcnDataset(Dataset):
     '''
     TCN数据集 - 预加载版本
-    在初始化时预加载所有数据到内存，提高训练稳定性和速度
+    在初始化时预加载所有数据到内存,提高训练稳定性和速度
     '''
 
     def __init__(self,
@@ -26,9 +26,10 @@ class TcnDataset(Dataset):
                  remove_nan: bool = True,
                  action_patterns: Optional[List[str]] = None,
                  enable_action_filter: bool = False,
-                 activity_flag: bool = False):
+                 activity_flag: bool = False,
+                 min_sequence_length: int = -1):
         """
-        初始化数据集，支持训练/测试模式和新文件结构
+        初始化数据集,支持训练/测试模式和新文件结构
         在初始化时预加载所有数据到内存
 
         参数:
@@ -37,13 +38,14 @@ class TcnDataset(Dataset):
             label_names: 标签列名列表
             side: 身体侧别 ('l' 或 'r')
             participant_masses: 参与者体重字典
-            device: 计算设备（用于记录）
-            mode: 数据集模式，'train' 或 'test'
-            file_suffix: 文件后缀映射字典，默认为 None 时使用预设值
-            remove_nan: 是否自动检测并移除包含NaN的行（默认True）
+            device: 计算设备(用于记录)
+            mode: 数据集模式,'train' 或 'test'
+            file_suffix: 文件后缀映射字典,默认为 None 时使用预设值
+            remove_nan: 是否自动检测并移除包含NaN的行(默认True)
             action_patterns: 运动类型筛选的正则表达式列表
             enable_action_filter: 是否启用action_patterns筛选
-            activity_flag: 是否启用activity_flag掩码功能（默认False）
+            activity_flag: 是否启用activity_flag掩码功能(默认False)
+            min_sequence_length: 最小序列长度,-1表示不限制(默认-1)
         """
         self.data_dir = data_dir
         self.input_names = input_names
@@ -56,13 +58,14 @@ class TcnDataset(Dataset):
         self.action_patterns = action_patterns
         self.enable_action_filter = enable_action_filter
         self.activity_flag = activity_flag
+        self.min_sequence_length = min_sequence_length
 
         # 设置文件后缀映射
         if file_suffix is None:
             self.file_suffix = {
                 "input": "_exo.csv",
                 "label": "_moment_filt.csv",
-                "flag":"_activity_flag.csv"}
+                "flag": "_activity_flag.csv"}
         else:
             self.file_suffix = file_suffix
 
@@ -77,20 +80,34 @@ class TcnDataset(Dataset):
             'trials_with_nan': 0,
             'total_rows_removed': 0,
             'trials_processed': 0,
-            'trials_with_all_nan_labels': 0  # 新增：标签全为NaN的试验数
+            'trials_with_all_nan_labels': 0  # 新增:标签全为NaN的试验数
+        }
+
+        # 序列长度过滤统计信息
+        self.length_filter_stats = {
+            'trials_before_filter': 0,
+            'trials_after_filter': 0,
+            'trials_filtered_out': 0,
+            'min_length_before': 0,
+            'max_length_before': 0,
+            'min_length_after': 0,
+            'max_length_after': 0
         }
 
         filter_status = "启用" if self.enable_action_filter else "禁用"
         print(f"开始加载 {self.mode} 数据集 (TCN)...")
         print(f"找到 {len(self.trial_names)} 个试验 (动作筛选: {filter_status})")
 
-        # === 预加载所有数据到内存（关键修改）===
+        # === 预加载所有数据到内存(关键修改)===
         self.all_input_data = []  # 存储所有试验的输入数据
         self.all_label_data = []  # 存储所有试验的标签数据
         self.trial_lengths = []  # 存储每个试验的原始长度
         self.all_activity_mask = []  # 存储所有试验的activity flag掩码
         self._preload_all_data()
-        breakpoint()
+
+        # === 根据min_sequence_length过滤序列 ===
+        if self.min_sequence_length > 0:
+            self._filter_by_sequence_length()
 
         # === 检测并移除标签全为NaN的序列 ===
         self._remove_invalid_label_sequences()
@@ -99,6 +116,11 @@ class TcnDataset(Dataset):
         # self._remove_label_sequences_with_any_nan()
 
         print(f"数据集初始化完成 - 模式: {self.mode}, 试验数量: {len(self.trial_names)}")
+
+        # 打印序列长度过滤统计
+        if self.min_sequence_length > 0:
+            self.print_length_filter_summary()
+
         if self.remove_nan:
             self.print_nan_removal_summary()
 
@@ -109,7 +131,7 @@ class TcnDataset(Dataset):
     def __getitem__(self, idx: int):
         '''
         根据提供的索引获取预加载的数据
-        返回格式与原版相同，保持与collate_fn_tcn的兼容性
+        返回格式与原版相同,保持与collate_fn_tcn的兼容性
 
         参数:
             idx: 整数索引
@@ -124,17 +146,17 @@ class TcnDataset(Dataset):
         # 从numpy转换为tensor
         # 尺寸为[C,N]
         input_data = torch.from_numpy(self.all_input_data[idx]).float()
-        #尺寸为[N_label,N]
+        # 尺寸为[N_label,N]
         label_data = torch.from_numpy(self.all_label_data[idx]).float()
         if self.activity_flag:
-            #尺寸为[N]
+            # 尺寸为[N]
             activity_mask = torch.from_numpy(self.all_activity_mask[idx]).float()
         else:
             activity_mask = None
 
         trial_length = [self.trial_lengths[idx]]
 
-        # print(f"加载试验名称: {self.trial_names[i]}， 尺寸为 {input_data.size()}")
+        # print(f"加载试验名称: {self.trial_names[i]}, 尺寸为 {input_data.size()}")
 
         return input_data, label_data, trial_length, activity_mask
 
@@ -150,25 +172,29 @@ class TcnDataset(Dataset):
         '''返回NaN移除统计信息'''
         return self.nan_removal_stats
 
+    def get_length_filter_stats(self):
+        '''返回序列长度过滤统计信息'''
+        return self.length_filter_stats
+
     def _match_action_patterns(self, trial_name: str) -> bool:
         """
         检查试验名称是否匹配任何一个action_pattern
 
         参数:
-            trial_name: 试验名称，格式为 "参与者/运动类型"
+            trial_name: 试验名称,格式为 "参与者/运动类型"
 
         返回:
-            如果匹配返回True，否则返回False
+            如果匹配返回True,否则返回False
         """
         if not self.enable_action_filter or not self.action_patterns:
             return True
 
-        # 提取试验项目名称（不包含参与者名称）
+        # 提取试验项目名称(不包含参与者名称)
         trial_basename = os.path.basename(trial_name)
 
-        # 遍历所有pattern，如果任何一个匹配就返回True
+        # 遍历所有pattern,如果任何一个匹配就返回True
         for pattern_line in self.action_patterns:
-            # 每一行可能包含多个正则表达式，用逗号分隔
+            # 每一行可能包含多个正则表达式,用逗号分隔
             patterns = [p.strip() for p in pattern_line.split(',')]
 
             for pattern in patterns:
@@ -179,7 +205,7 @@ class TcnDataset(Dataset):
 
     def _get_trial_names(self):
         '''
-        扫描数据目录，获取所有试验名称。
+        扫描数据目录,获取所有试验名称。
         新目录结构: data_dir/(train/test)/人名/运动状态/
         支持基于action_patterns的筛选
         '''
@@ -189,7 +215,7 @@ class TcnDataset(Dataset):
         if not os.path.exists(mode_dir):
             raise FileNotFoundError(f"模式目录不存在: {mode_dir}")
 
-        # 获取参与者目录（排除隐藏文件和无关文件）
+        # 获取参与者目录(排除隐藏文件和无关文件)
         participants = []
         for item in os.listdir(mode_dir):
             item_path = os.path.join(mode_dir, item)
@@ -200,7 +226,7 @@ class TcnDataset(Dataset):
         if not participants:
             raise ValueError(f"在目录 {mode_dir} 中未找到参与者数据")
 
-        # 遍历参与者目录，收集试验名称
+        # 遍历参与者目录,收集试验名称
         trial_names = []
         filtered_out_count = 0
 
@@ -222,238 +248,227 @@ class TcnDataset(Dataset):
                         filtered_out_count += 1
 
         if not trial_names:
-            raise ValueError(f"在参与者目录中未找到试验数据（可能被action_patterns过滤）")
+            raise ValueError(f"在参与者目录中未找到试验数据(可能被action_patterns过滤)")
 
         if self.enable_action_filter and filtered_out_count > 0:
             print(f"过滤掉 {filtered_out_count} 个不匹配的试验")
 
         return trial_names
 
-    def _find_valid_range(self, df: pd.DataFrame, columns: List[str]) -> Tuple[int, int]:
-        """
-        在指定列中查找有效数据范围(不含NaN的行范围)
-
-        重要: 此方法会检测并移除文件**开头**和**结尾**的NaN行
+    def _find_valid_range(self, df: pd.DataFrame, column_names: List[str]) -> Tuple[int, int]:
+        '''
+        找到DataFrame中给定列的有效数据范围,排除包含NaN的行
 
         参数:
-            df: DataFrame数据
-            columns: 要检查的列名列表
+            df: 输入的DataFrame
+            column_names: 需要检查NaN的列名列表
 
         返回:
-            (start_index, end_index): 有效数据的起始和结束索引(前闭后开区间)
-            如果所有行都包含NaN,返回 (0, 0)
-        """
-        # 检查指定列是否存在
-        valid_columns = [col for col in columns if col in df.columns]
-
-        if not valid_columns:
-            # 如果没有有效列，返回全部数据范围
-            return 0, len(df)
-
+            (start_idx, end_idx): 有效数据的起始和结束索引
+                                  如果所有行都是NaN,返回 (0, 0)
+        '''
         # 检查指定列中是否有NaN
-        subset_df = df[valid_columns]
-        nan_mask = subset_df.isna().any(axis=1)
-        valid_mask = ~nan_mask
+        has_nan = df[column_names].isna().any(axis=1)
 
-        # 获取所有有效行的索引
-        valid_indices = valid_mask[valid_mask].index.tolist()
-
-        if not valid_indices:
+        if has_nan.all():
             # 所有行都包含NaN
             return 0, 0
 
-        # 找到第一个和最后一个有效行
-        start_index = valid_indices[0]
-        end_index = valid_indices[-1] + 1  # +1 because we use [start:end) slicing
+        if not has_nan.any():
+            # 没有NaN,返回完整范围
+            return 0, len(df)
 
-        return start_index, end_index
+        # 找到第一个和最后一个有效(非NaN)行
+        valid_indices = np.where(~has_nan)[0]
+        start_idx = int(valid_indices[0])
+        end_idx = int(valid_indices[-1] + 1)
+
+        return start_idx, end_idx
 
     def _preload_all_data(self):
-        """
-        预加载所有试验数据到内存（关键优化）
-        这样只需要在初始化时读取一次CSV文件
-        """
-        print("预加载所有试验数据到内存...")
+        '''
+        预加载所有试验数据到内存
+        '''
+        print("预加载所有数据到内存...")
 
-        for trial_idx, trial_name in enumerate(self.trial_names):
-            if (trial_idx + 1) % 10 == 0 or (trial_idx + 1) == len(self.trial_names):
-                print(f"  加载进度: {trial_idx + 1}/{len(self.trial_names)}")
+        for idx, trial_name in enumerate(self.trial_names):
+            if (idx + 1) % 100 == 0 or idx == len(self.trial_names) - 1:
+                print(f"  加载进度: {idx + 1}/{len(self.trial_names)}")
 
-            # 加载单个试验数据
-            input_data, label_data, activity_mask = self._load_trial_data(trial_name)
+            input_data, label_data, activity_mask = self._load_single_trial(trial_name)
 
-            # 检查数据有效性
-            if torch.isnan(input_data).any():
-                print(f"  警告: {trial_name} 包含NaN值")
-
-            # 存储为numpy数组（更节省内存）
+            # 转换为numpy数组存储
             self.all_input_data.append(input_data.numpy())
             self.all_label_data.append(label_data.numpy())
-            if activity_mask is not None:
+            self.trial_lengths.append(input_data.shape[1])
+
+            if self.activity_flag:
                 self.all_activity_mask.append(activity_mask.numpy())
 
-            # 记录原始长度
-            self.trial_lengths.append(input_data.shape[1])
-            if input_data.shape[1] == 0:
-                break
+        print("数据预加载完成!")
 
-        print("所有数据预加载完成!")
+    def _filter_by_sequence_length(self):
+        '''
+        根据min_sequence_length过滤序列
+        移除序列长度小于min_sequence_length的试验
+        '''
+        if self.min_sequence_length <= 0:
+            return
+
+        print(f"\n开始根据最小序列长度 ({self.min_sequence_length}) 进行过滤...")
+
+        # 记录过滤前的统计信息
+        self.length_filter_stats['trials_before_filter'] = len(self.trial_names)
+        if self.trial_lengths:
+            self.length_filter_stats['min_length_before'] = min(self.trial_lengths)
+            self.length_filter_stats['max_length_before'] = max(self.trial_lengths)
+
+        # 找出需要保留的索引
+        valid_indices = []
+        filtered_trial_names = []
+
+        for idx, length in enumerate(self.trial_lengths):
+            if length >= self.min_sequence_length:
+                valid_indices.append(idx)
+            else:
+                filtered_trial_names.append(self.trial_names[idx])
+
+        # 计算过滤掉的试验数量
+        self.length_filter_stats['trials_filtered_out'] = len(self.trial_names) - len(valid_indices)
+
+        if self.length_filter_stats['trials_filtered_out'] > 0:
+            print(f"  过滤掉 {self.length_filter_stats['trials_filtered_out']} 个序列长度不足的试验")
+
+            for trial_name in filtered_trial_names:
+                print(f"    - {trial_name}")
+
+            # 只保留有效的数据
+            self.all_input_data = [self.all_input_data[i] for i in valid_indices]
+            self.all_label_data = [self.all_label_data[i] for i in valid_indices]
+            self.trial_lengths = [self.trial_lengths[i] for i in valid_indices]
+            self.trial_names = [self.trial_names[i] for i in valid_indices]
+
+            if self.activity_flag:
+                self.all_activity_mask = [self.all_activity_mask[i] for i in valid_indices]
+        else:
+            print(f"  所有试验的序列长度均满足要求,无需过滤")
+
+        # 记录过滤后的统计信息
+        self.length_filter_stats['trials_after_filter'] = len(self.trial_names)
+        if self.trial_lengths:
+            self.length_filter_stats['min_length_after'] = min(self.trial_lengths)
+            self.length_filter_stats['max_length_after'] = max(self.trial_lengths)
+
+        print(f"序列长度过滤完成!")
 
     def _remove_invalid_label_sequences(self):
-        """
-        检测并移除标签全为NaN的序列
-        同时更新trial_names、all_input_data、all_label_data和trial_lengths
-        """
-        if not self.remove_nan:
-            return
+        '''
+        检测并移除标签数据全为NaN的序列
+        注意:这个函数会修改所有预加载的数据列表
+        '''
+        invalid_indices = []
 
-        print("检测标签全为NaN的序列...")
-
-        valid_indices = []
-        removed_trials = []
-
-        for idx in range(len(self.trial_names)):
-            label_data = self.all_label_data[idx]
-
+        for idx, label_data in enumerate(self.all_label_data):
             # 检查标签数据是否全为NaN
-            if isinstance(label_data, np.ndarray):
-                is_all_nan = np.all(np.isnan(label_data))
-            else:  # torch.Tensor
-                is_all_nan = torch.all(torch.isnan(label_data)).item()
-
-            if is_all_nan:
-                removed_trials.append(self.trial_names[idx])
+            if np.isnan(label_data).all():
+                invalid_indices.append(idx)
                 self.nan_removal_stats['trials_with_all_nan_labels'] += 1
-            else:
-                valid_indices.append(idx)
+                print(f"  警告: 试验 '{self.trial_names[idx]}' 的标签数据全为NaN,将被移除")
 
-        # 如果有需要移除的试验
-        if removed_trials:
-            print(f"  发现 {len(removed_trials)} 个标签全为NaN的试验，正在移除...")
-            for trial_name in removed_trials:
-                print(f"    - {trial_name}")
+        # 如果有无效序列,从所有列表中移除
+        if invalid_indices:
+            print(f"\n检测到 {len(invalid_indices)} 个标签全为NaN的序列,正在移除...")
 
-            # 更新所有相关列表
-            self.trial_names = [self.trial_names[i] for i in valid_indices]
-            self.all_input_data = [self.all_input_data[i] for i in valid_indices]
-            self.all_label_data = [self.all_label_data[i] for i in valid_indices]
-            self.trial_lengths = [self.trial_lengths[i] for i in valid_indices]
-            self.all_activity_mask = [self.all_activity_mask[i] for i in valid_indices]
+            # 创建有效索引的掩码
+            valid_mask = np.ones(len(self.trial_names), dtype=bool)
+            valid_mask[invalid_indices] = False
 
-            print(f"  移除完成，剩余 {len(self.trial_names)} 个有效试验")
+            # 只保留有效的序列
+            self.all_input_data = [data for i, data in enumerate(self.all_input_data) if valid_mask[i]]
+            self.all_label_data = [data for i, data in enumerate(self.all_label_data) if valid_mask[i]]
+            self.trial_lengths = [length for i, length in enumerate(self.trial_lengths) if valid_mask[i]]
+            self.trial_names = [name for i, name in enumerate(self.trial_names) if valid_mask[i]]
+
+            if self.activity_flag:
+                self.all_activity_mask = [mask for i, mask in enumerate(self.all_activity_mask) if valid_mask[i]]
+
+            print(f"移除完成,剩余有效试验数: {len(self.trial_names)}")
         else:
-            print("  未发现标签全为NaN的序列")
+            print("未检测到标签全为NaN的序列")
 
     def _remove_label_sequences_with_any_nan(self):
-        """
-        检测并移除【标签中含有 NaN】的序列
-        只要标签中出现 NaN，就移除对应 trial
-        同时更新 trial_names、all_input_data、all_label_data 和 trial_lengths
-        """
-        if not self.remove_nan:
-            return
-
-        print("检测标签中含有 NaN 的序列...")
-
-        valid_indices = []
-        removed_trials = []
-
-        # 如果你有统计信息，可以先确保这个 key 存在
-        if hasattr(self, "nan_removal_stats"):
-            self.nan_removal_stats.setdefault('trials_with_any_nan_labels', 0)
-
-        for idx in range(len(self.trial_names)):
-            label_data = self.all_label_data[idx]
-
-            # 检查标签数据是否“包含 NaN”
-            if isinstance(label_data, np.ndarray):
-                has_nan = np.any(np.isnan(label_data))
-            else:  # torch.Tensor
-                has_nan = torch.isnan(label_data).any().item()
-
-            if has_nan:
-                removed_trials.append(self.trial_names[idx])
-                if hasattr(self, "nan_removal_stats"):
-                    self.nan_removal_stats['trials_with_any_nan_labels'] += 1
-            else:
-                valid_indices.append(idx)
-
-        # 如果有需要移除的试验
-        if removed_trials:
-            print(f"  发现 {len(removed_trials)} 个标签中含有 NaN 的试验，正在移除...")
-            for trial_name in removed_trials:
-                print(f"    - {trial_name}")
-
-            # 更新所有相关列表
-            self.trial_names = [self.trial_names[i] for i in valid_indices]
-            self.all_input_data = [self.all_input_data[i] for i in valid_indices]
-            self.all_label_data = [self.all_label_data[i] for i in valid_indices]
-            self.trial_lengths = [self.trial_lengths[i] for i in valid_indices]
-
-            print(f"  移除完成，剩余 {len(self.trial_names)} 个有效试验")
-        else:
-            print("  未发现标签中含有 NaN 的序列")
-
-    def _load_trial_data(self, trial_name: str) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
         '''
-        从单个试验目录加载数据，适配新的文件命名格式
-        支持自动检测和移除包含NaN的行（包括文件开头和结尾）
+        检测并移除标签数据包含任何NaN的序列
+        注意:这个函数会修改所有预加载的数据列表
+        '''
+        invalid_indices = []
+
+        for idx, label_data in enumerate(self.all_label_data):
+            # 检查标签数据是否包含任何NaN
+            if np.isnan(label_data).any():
+                invalid_indices.append(idx)
+                print(f"  警告: 试验 '{self.trial_names[idx]}' 的标签数据包含NaN,将被移除")
+
+        # 如果有无效序列,从所有列表中移除
+        if invalid_indices:
+            print(f"\n检测到 {len(invalid_indices)} 个包含NaN的标签序列,正在移除...")
+
+            # 创建有效索引的掩码
+            valid_mask = np.ones(len(self.trial_names), dtype=bool)
+            valid_mask[invalid_indices] = False
+
+            # 只保留有效的序列
+            self.all_input_data = [data for i, data in enumerate(self.all_input_data) if valid_mask[i]]
+            self.all_label_data = [data for i, data in enumerate(self.all_label_data) if valid_mask[i]]
+            self.trial_lengths = [length for i, length in enumerate(self.trial_lengths) if valid_mask[i]]
+            self.trial_names = [name for i, name in enumerate(self.trial_names) if valid_mask[i]]
+
+            if self.activity_flag:
+                self.all_activity_mask = [mask for i, mask in enumerate(self.all_activity_mask) if valid_mask[i]]
+
+            print(f"移除完成,剩余有效试验数: {len(self.trial_names)}")
+        else:
+            print("未检测到包含NaN的标签序列")
+
+    def _load_single_trial(self, trial_name: str) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
+        '''
+        加载单个试验的输入数据和标签数据
 
         参数:
-            trial_name: 试验名称，格式为 "参与者/试验项目"
+            trial_name: 试验名称,格式为 "参与者/试验项目"
 
         返回:
-            input_data: [num_input_features, sequence_length]
-            label_data: [num_label_features, sequence_length]
-            activity_mask: [sequence_length] or None
+            input_data: 输入数据张量
+            label_data: 标签数据张量
+            activity_mask: activity flag掩码张量(如果启用)或None
         '''
-        # 构建完整的试验目录路径
-        trial_dir = os.path.join(self.data_dir, self.mode, trial_name)
+        # 提取参与者名称和试验项目
+        participant = os.path.dirname(trial_name)
+        trial_item = os.path.basename(trial_name)
 
-        if not os.path.exists(trial_dir):
-            raise FileNotFoundError(f"试验目录不存在: {trial_dir}")
+        # 构建文件路径
+        trial_dir = os.path.join(self.data_dir, self.mode, participant, trial_item)
 
-        # 从试验名称中提取参与者姓名
-        participant = trial_name.split("/")[0].split("\\")[0]
+        # 构建文件名(假设文件名为 参与者_试验项目_后缀.csv)
+        base_filename = f"{participant}_{trial_item}"
+        input_file_path = os.path.join(trial_dir, base_filename + self.file_suffix["input"])
+        label_file_path = os.path.join(trial_dir, base_filename + self.file_suffix["label"])
 
-        if participant not in self.participant_masses:
-            print(f"  警告: 参与者 {participant} 的体重信息未提供")
+        # 获取参与者体重
+        body_mass = self.participant_masses.get(participant, 70.0)
 
-        # 构建新的文件名（基于参与者姓名和试验项目）
-        file_prefix = f"{participant}_{os.path.basename(trial_name)}"
+        # 加载输入数据并检测NaN
+        input_data, valid_range = self._load_input_data(input_file_path, body_mass)
 
-        # 构建输入和标签文件路径（新命名格式）
-        input_filename = f"{file_prefix}{self.file_suffix['input']}"
-        label_filename = f"{file_prefix}{self.file_suffix['label']}"
+        # 加载标签数据(使用与输入数据相同的有效范围)
+        label_data = self._load_label_data(label_file_path, valid_range)
 
-        input_file_path = os.path.join(trial_dir, input_filename)
-        label_file_path = os.path.join(trial_dir, label_filename)
-
-        # 检查文件是否存在
-        if not os.path.exists(input_file_path):
-            raise FileNotFoundError(f"输入文件不存在: {input_file_path}")
-
-        if not os.path.exists(label_file_path):
-            raise FileNotFoundError(f"标签文件不存在: {label_file_path}")
-
-        # 加载输入数据
-        # input_data,输入传感器数据，尺寸为[num_input_features, sequence_length],valid_range，有效数据范围，[start,end]
-        input_data, valid_range = self._load_input_data(input_file_path,
-                                                        body_mass=self.participant_masses.get(participant, 1.0))
-
-        # 加载标签数据（使用相同的有效范围）
-        # label_data,标签数据，尺寸为[num_label_features, sequence_length]
-        label_data = self._load_label_data(label_file_path, valid_range=valid_range)
-
-        # 加载activity_flag数据（如果启用）
+        # 加载activity_flag数据(如果启用)
         activity_mask = None
         if self.activity_flag:
-            activity_filename = f"{file_prefix}{self.file_suffix['flag']}"
-            activity_file_path = os.path.join(trial_dir, activity_filename)
-
+            activity_file_path = os.path.join(trial_dir, base_filename + self.file_suffix["flag"])
             if os.path.exists(activity_file_path):
-                # activity_mask，数据是否有效的掩码，[sequence_length]
-                activity_mask = self._load_activity_flag(activity_file_path, valid_range=valid_range)
+                activity_mask = self._load_activity_flag(activity_file_path, valid_range)
             else:
                 raise FileNotFoundError(f"  警告: activity_flag已启用但文件不存在: {activity_file_path}")
 
@@ -467,25 +482,25 @@ class TcnDataset(Dataset):
     def _load_input_data(self, file_path: str, body_mass: float) -> Tuple[torch.Tensor, Optional[Tuple[int, int]]]:
         '''
         加载并预处理输入数据CSV文件
-        支持自动检测和移除包含NaN的行（包括文件开头和结尾）
+        支持自动检测和移除包含NaN的行(包括文件开头和结尾)
 
         返回:
             input_data: 处理后的输入数据张量 [num_input_features, sequence_length]
-            valid_range: 有效数据范围（如果有截断），或None
+            valid_range: 有效数据范围(如果有截断),或None
         '''
         # 读取CSV文件
         df = pd.read_csv(file_path)
         # breakpoint()
         original_length = len(df)
 
-        # 如果启用NaN移除，检测并截断
+        # 如果启用NaN移除,检测并截断
         valid_range = None
         if self.remove_nan:
             start_idx, end_idx = self._find_valid_range(df, self.input_names)
 
             if end_idx == 0:
                 # 所有行都是NaN
-                print(f"  警告: {file_path} 所有行都包含NaN，返回空张量")
+                print(f"  警告: {file_path} 所有行都包含NaN,返回空张量")
                 return torch.zeros((len(self.input_names), 0), dtype=torch.float32), (start_idx, end_idx)
 
             if start_idx > 0 or end_idx < original_length:
@@ -528,14 +543,14 @@ class TcnDataset(Dataset):
 
         参数:
             file_path: 标签文件路径
-            valid_range: 如果不为None，使用指定的有效范围以匹配输入数据
+            valid_range: 如果不为None,使用指定的有效范围以匹配输入数据
 
         返回:
             label_data: [num_label_features, sequence_length]
         '''
         df = pd.read_csv(file_path)
 
-        # 如果指定了有效范围，使用该范围截断标签数据
+        # 如果指定了有效范围,使用该范围截断标签数据
         if valid_range is not None:
             start_idx, end_idx = valid_range
             if end_idx == 0:
@@ -560,7 +575,7 @@ class TcnDataset(Dataset):
 
         参数:
             file_path: activity_flag文件路径
-            valid_range: 如果不为None，使用指定的有效范围以匹配输入数据
+            valid_range: 如果不为None,使用指定的有效范围以匹配输入数据
 
         返回:
             activity_mask: [sequence_length] 值为0或1的掩码
@@ -573,7 +588,7 @@ class TcnDataset(Dataset):
         if side_column not in df.columns:
             raise ValueError(f"activity_flag文件缺失必需的列: {side_column}")
 
-        # 如果指定了有效范围，截断activity_flag数据以匹配输入数据
+        # 如果指定了有效范围,截断activity_flag数据以匹配输入数据
         if valid_range is not None:
             start_idx, end_idx = valid_range
             if end_idx == 0:
@@ -585,6 +600,29 @@ class TcnDataset(Dataset):
         activity_mask = torch.tensor(df[side_column].values, dtype=torch.float32)
 
         return activity_mask
+
+    def print_length_filter_summary(self):
+        """打印序列长度过滤统计摘要"""
+        stats = self.length_filter_stats
+        print(f"\n{'=' * 60}")
+        print(f"序列长度过滤统计摘要 - {self.mode.upper()} 数据集")
+        print(f"{'=' * 60}")
+        print(f"最小序列长度阈值: {self.min_sequence_length}")
+        print(f"过滤前试验数量: {stats['trials_before_filter']}")
+        print(f"过滤后试验数量: {stats['trials_after_filter']}")
+        print(f"被过滤掉的试验数: {stats['trials_filtered_out']}")
+
+        if stats['trials_before_filter'] > 0:
+            filter_percentage = 100 * stats['trials_filtered_out'] / stats['trials_before_filter']
+            print(f"过滤比例: {filter_percentage:.2f}%")
+
+        if stats['min_length_before'] > 0:
+            print(f"过滤前序列长度范围: [{stats['min_length_before']}, {stats['max_length_before']}]")
+
+        if stats['trials_after_filter'] > 0 and stats['min_length_after'] > 0:
+            print(f"过滤后序列长度范围: [{stats['min_length_after']}, {stats['max_length_after']}]")
+
+        print(f"{'=' * 60}\n")
 
     def print_nan_removal_summary(self):
         """打印NaN移除统计摘要"""
@@ -607,7 +645,6 @@ class TcnDataset(Dataset):
 
         print(f"{'=' * 60}\n")
 
-
 def main():
     sys.path.insert(0, '.')
     from torch.utils.data import DataLoader
@@ -615,14 +652,14 @@ def main():
     from utils.utils import collate_fn_tcn
 
     parser = argparse.ArgumentParser(
-        description="快速测试 TcnDataset 数据加载流程，打印样本形状和统计信息。"
+        description="快速测试 TcnDataset 数据加载流程,打印样本形状和统计信息。"
     )
     parser.add_argument("--config", type=str, default="configs.default_config",
-                        help="配置文件模块路径，默认 configs.default_config")
+                        help="配置文件模块路径,默认 configs.default_config")
     parser.add_argument("--mode", choices=["train", "test"], default="train",
                         help="选择加载训练集或测试集")
     parser.add_argument("--device", type=str, default="cpu",
-                        help="将数据加载到的设备，如 cpu 或 cuda:0")
+                        help="将数据加载到的设备,如 cpu 或 cuda:0")
     parser.add_argument("--max_trials", type=int, default=3,
                         help="最多打印多少个样本的尺寸信息")
 
@@ -638,9 +675,14 @@ def main():
     device = torch.device(args.device)
 
     tcn_kwargs = dict(data_dir=config.data_dir, input_names=input_names, label_names=label_names, side=config.side,
-                      participant_masses=config.participant_masses, device=device, action_patterns=getattr(config, 'action_patterns', None),
-                      enable_action_filter=getattr(config, 'enable_action_filter', False), activity_flag=config.activity_flag)
+                      participant_masses=config.participant_masses, device=device,
+                      action_patterns=getattr(config, 'action_patterns', None),
+                      enable_action_filter=getattr(config, 'enable_action_filter', False),
+                      activity_flag=config.activity_flag,
+                      min_sequence_length=getattr(config, 'min_sequence_length', -1))
     # print(tcn_kwargs)
+
+    tcn_kwargs['min_sequence_length'] = 500
 
     dataset = TcnDataset(mode='train', **tcn_kwargs)
 
@@ -662,7 +704,7 @@ def main():
 
     data_loader = DataLoader(dataset, batch_size=2, shuffle=False, collate_fn=collate_fn_tcn)
 
-    print("示例样本：")
+    print("示例样本:")
     for batch_idx, batch in enumerate(data_loader):
         print(f"批次索引: {batch_idx}")
         inputs = batch[0]
@@ -670,15 +712,16 @@ def main():
         seq_lengths = batch[2]
         masks = batch[3]
 
-        print(f'输入传感器数据形状：{inputs.size()}')
-        print(f'输入标签数据形状：{labels.size()}')
-        print(f'输入数据长度：{seq_lengths}')
+        print(f'输入传感器数据形状:{inputs.size()}')
+        print(f'输入标签数据形状:{labels.size()}')
+        print(f'输入数据长度:{seq_lengths}')
         if masks[0] is not None:
             for i in range(len(masks)):
-                print(f'输入掩码数据形状：{masks[i].size()}')
+                print(f'输入掩码数据形状:{masks[i].size()}')
 
         if batch_idx >= args.max_trials:
             break
+
 
 if __name__ == "__main__":
     main()

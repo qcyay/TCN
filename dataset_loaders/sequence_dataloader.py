@@ -6,7 +6,6 @@ import torch
 from torch.utils.data import Dataset
 import numpy as np
 
-
 class SequenceDataset(Dataset):
     '''
     优化的通用序列数据集，支持预测模型和生成式模型
@@ -32,7 +31,8 @@ class SequenceDataset(Dataset):
                  remove_nan: bool = True,
                  action_patterns: Optional[List[str]] = None,
                  enable_action_filter: bool = False,
-                 activity_flag: bool = False):
+                 activity_flag: bool = False,
+                 min_sequence_length: int = -1):
         """
         初始化序列数据集
 
@@ -53,6 +53,8 @@ class SequenceDataset(Dataset):
             remove_nan: 是否自动检测并移除包含NaN的行
             action_patterns: 运动类型筛选的正则表达式列表
             enable_action_filter: 是否启用action_patterns筛选
+            activity_flag: 是否启用activity_flag掩码功能(默认False)
+            min_sequence_length: 最小序列长度,-1表示不限制(默认-1)
         """
         self.data_dir = data_dir
         self.input_names = input_names
@@ -70,6 +72,7 @@ class SequenceDataset(Dataset):
         self.action_patterns = action_patterns
         self.enable_action_filter = enable_action_filter
         self.activity_flag = activity_flag
+        self.min_sequence_length = min_sequence_length
 
         # 设置文件后缀映射
         if file_suffix is None:
@@ -80,10 +83,6 @@ class SequenceDataset(Dataset):
             }
         else:
             self.file_suffix = file_suffix
-
-        # 验证模式参数
-        if self.mode not in ["train", "test"]:
-            raise ValueError(f"模式参数必须是 'train' 或 'test'，当前为: {mode}")
 
         # 获取试验名称列表
         self.trial_names = self._get_trial_names()
@@ -96,6 +95,17 @@ class SequenceDataset(Dataset):
             'trials_with_all_nan_labels': 0  # 标签全为NaN的试验数
         }
 
+        # 序列长度过滤统计信息
+        self.length_filter_stats = {
+            'trials_before_filter': 0,
+            'trials_after_filter': 0,
+            'trials_filtered_out': 0,
+            'min_length_before': 0,
+            'max_length_before': 0,
+            'min_length_after': 0,
+            'max_length_after': 0
+        }
+
         filter_status = "启用" if self.enable_action_filter else "禁用"
         print(f"开始加载 {self.mode} 数据集 ({model_type})...")
         print(f"找到 {len(self.trial_names)} 个试验 (动作筛选: {filter_status})")
@@ -103,8 +113,13 @@ class SequenceDataset(Dataset):
         # 预加载所有数据到内存
         self.all_input_data = []  # 存储所有试验的输入数据
         self.all_label_data = []  # 存储所有试验的标签数据
-        self.all_mask_data = []  # 存储所有试验的activity flag掩码
+        self.trial_lengths = []  # 存储每个试验的原始长度
+        self.all_mask_data = []  # 存储所有试验的动作掩码
         self._preload_all_data()
+
+        # === 根据min_sequence_length过滤序列 ===
+        if self.min_sequence_length > 0:
+            self._filter_by_sequence_length()
 
         # === 检测并移除标签全为NaN的序列 ===
         self._remove_invalid_label_sequences()
@@ -119,6 +134,10 @@ class SequenceDataset(Dataset):
         print(f"数据集初始化完成 - 模式: {self.mode}, "
               f"试验数量: {len(self.trial_names)}, "
               f"序列数量: {len(self.sequences)}")
+
+        # 打印序列长度过滤统计
+        if self.min_sequence_length > 0:
+            self.print_length_filter_summary()
 
         if self.remove_nan and self.nan_removal_stats['trials_with_all_nan_labels'] > 0:
             self.print_nan_removal_summary()
@@ -342,8 +361,63 @@ class SequenceDataset(Dataset):
             self.all_input_data.append(input_data.numpy())
             self.all_label_data.append(label_data.numpy())
             self.all_mask_data.append(mask_data.numpy())
+            self.trial_lengths.append(input_data.shape[1])
 
         print("所有数据预加载完成!")
+
+    def _filter_by_sequence_length(self):
+        '''
+        根据min_sequence_length过滤序列
+        移除序列长度小于min_sequence_length的试验
+        '''
+        if self.min_sequence_length <= 0:
+            return
+
+        print(f"\n开始根据最小序列长度 ({self.min_sequence_length}) 进行过滤...")
+
+        # 记录过滤前的统计信息
+        self.length_filter_stats['trials_before_filter'] = len(self.trial_names)
+        if self.trial_lengths:
+            self.length_filter_stats['min_length_before'] = min(self.trial_lengths)
+            self.length_filter_stats['max_length_before'] = max(self.trial_lengths)
+
+        # 找出需要保留的索引
+        valid_indices = []
+        filtered_trial_names = []
+
+        for idx, length in enumerate(self.trial_lengths):
+            if length >= self.min_sequence_length:
+                valid_indices.append(idx)
+            else:
+                filtered_trial_names.append(self.trial_names[idx])
+
+        # 计算过滤掉的试验数量
+        self.length_filter_stats['trials_filtered_out'] = len(self.trial_names) - len(valid_indices)
+
+        if self.length_filter_stats['trials_filtered_out'] > 0:
+            print(f"  过滤掉 {self.length_filter_stats['trials_filtered_out']} 个序列长度不足的试验")
+
+            for trial_name in filtered_trial_names:
+                print(f"    - {trial_name}")
+
+            # 只保留有效的数据
+            self.all_input_data = [self.all_input_data[i] for i in valid_indices]
+            self.all_label_data = [self.all_label_data[i] for i in valid_indices]
+            self.trial_lengths = [self.trial_lengths[i] for i in valid_indices]
+            self.trial_names = [self.trial_names[i] for i in valid_indices]
+
+            if self.activity_flag:
+                self.all_mask_data = [self.all_mask_data[i] for i in valid_indices]
+        else:
+            print(f"  所有试验的序列长度均满足要求,无需过滤")
+
+        # 记录过滤后的统计信息
+        self.length_filter_stats['trials_after_filter'] = len(self.trial_names)
+        if self.trial_lengths:
+            self.length_filter_stats['min_length_after'] = min(self.trial_lengths)
+            self.length_filter_stats['max_length_after'] = max(self.trial_lengths)
+
+        print(f"序列长度过滤完成!")
 
     def _remove_invalid_label_sequences(self):
         """
@@ -381,6 +455,7 @@ class SequenceDataset(Dataset):
             self.all_input_data = [self.all_input_data[i] for i in valid_indices]
             self.all_label_data = [self.all_label_data[i] for i in valid_indices]
             self.all_mask_data = [self.all_mask_data[i] for i in valid_indices]
+            self.trial_lengths = [self.trial_lengths[i] for i in valid_indices]
 
             print(f"  移除完成，剩余 {len(self.trial_names)} 个有效试验")
         else:
@@ -571,6 +646,29 @@ class SequenceDataset(Dataset):
             counts[trial_idx] += 1
         return counts
 
+    def print_length_filter_summary(self):
+        """打印序列长度过滤统计摘要"""
+        stats = self.length_filter_stats
+        print(f"\n{'=' * 60}")
+        print(f"序列长度过滤统计摘要 - {self.mode.upper()} 数据集")
+        print(f"{'=' * 60}")
+        print(f"最小序列长度阈值: {self.min_sequence_length}")
+        print(f"过滤前试验数量: {stats['trials_before_filter']}")
+        print(f"过滤后试验数量: {stats['trials_after_filter']}")
+        print(f"被过滤掉的试验数: {stats['trials_filtered_out']}")
+
+        if stats['trials_before_filter'] > 0:
+            filter_percentage = 100 * stats['trials_filtered_out'] / stats['trials_before_filter']
+            print(f"过滤比例: {filter_percentage:.2f}%")
+
+        if stats['min_length_before'] > 0:
+            print(f"过滤前序列长度范围: [{stats['min_length_before']}, {stats['max_length_before']}]")
+
+        if stats['trials_after_filter'] > 0 and stats['min_length_after'] > 0:
+            print(f"过滤后序列长度范围: [{stats['min_length_after']}, {stats['max_length_after']}]")
+
+        print(f"{'=' * 60}\n")
+
     def print_nan_removal_summary(self):
         """打印NaN移除统计摘要"""
         stats = self.nan_removal_stats
@@ -618,7 +716,10 @@ def main():
                            participant_masses=config.participant_masses, device=device, model_type=config.model_type,
                            start_token_value=config.start_token_value if config.model_type == "GenerativeTransformer" else 0.0,
                            remove_nan=True, action_patterns=getattr(config, 'action_patterns', None),
-                           enable_action_filter=getattr(config, 'enable_action_filter', False), activity_flag=config.activity_flag)
+                           enable_action_filter=getattr(config, 'enable_action_filter', False), activity_flag=config.activity_flag,
+                           min_sequence_length=getattr(config, 'min_sequence_length', -1))
+
+    sequence_kwargs['min_sequence_length'] = 500
 
     dataset = SequenceDataset(mode='train', **sequence_kwargs)
 
