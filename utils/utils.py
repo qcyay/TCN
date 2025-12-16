@@ -500,7 +500,7 @@ def reconstruct_sequences(
                 # 对应的位置索引
                 positions = torch.arange(i, min(i + output_seq_len, num_subseqs), device=trial_est.device)
                 # 使用scatter_add累加
-                est_full.index_add_(1, positions, trial_est[i])
+                est_full.index_add_(1, positions, trial_est[i,:,:positions.size(0)])
                 count.index_add_(1, positions, torch.ones(num_outputs, positions.size(0), device=trial_est.device))
 
             # 计算平均值

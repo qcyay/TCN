@@ -295,7 +295,8 @@ def main():
                                participant_masses=config.participant_masses, device=device, model_type=config.model_type,
                                start_token_value=config.start_token_value if config.model_type == "GenerativeTransformer" else 0.0,
                                remove_nan=True, action_patterns=getattr(config, 'action_patterns', None),
-                               enable_action_filter=getattr(config, 'enable_action_filter', False), activity_flag=config.activity_flag)
+                               enable_action_filter=getattr(config, 'enable_action_filter', False), activity_flag=config.activity_flag,
+                               min_sequence_length=getattr(config, 'min_sequence_length', -1))
 
         train_dataset = SequenceDataset(mode='train', **sequence_kwargs)
 
@@ -322,7 +323,7 @@ def main():
         print(f"\n加载TCN训练数据集...")
 
         tcn_kwargs = dict(data_dir=config.data_dir, input_names=input_names, label_names=label_names, side=config.side, participant_masses=config.participant_masses, device=device,
-                          action_patterns=config.action_patterns, enable_action_filter=config.enable_action_filter, activity_flag=config.activity_flag)
+                          action_patterns=config.action_patterns, enable_action_filter=config.enable_action_filter, activity_flag=config.activity_flag, min_sequence_length=config.min_sequence_length)
 
         train_dataset = TcnDataset(mode='train', **tcn_kwargs)
 

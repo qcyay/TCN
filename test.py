@@ -98,7 +98,8 @@ def main():
             remove_nan=True,
             action_patterns=getattr(config, 'action_patterns', None),
             enable_action_filter=getattr(config, 'enable_action_filter', False),
-            activity_flag=config.activity_flag
+            activity_flag=config.activity_flag,
+            min_sequence_length=getattr(config, 'min_sequence_length', -1)
         )
 
         collate_fn = collate_fn_generative if model_type == "GenerativeTransformer" else collate_fn_predictor
@@ -204,7 +205,8 @@ def main():
             remove_nan=True,
             action_patterns=getattr(config, 'action_patterns', None),
             enable_action_filter=getattr(config, 'enable_action_filter', False),
-            activity_flag=config.activity_flag
+            activity_flag=config.activity_flag,
+            min_sequence_length=getattr(config, 'min_sequence_length', -1)
         )
 
         test_loader = DataLoader(
