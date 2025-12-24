@@ -767,8 +767,7 @@ def compute_category_metrics(
         for j, label_name in enumerate(label_names):
             est = est_seq[j]  # [seq_len]
             lbl = lbl_seq[j]  # [seq_len]
-            if mask_seq is not None:
-                mask = mask_seq[j] # [seq_len]
+            mask = mask_seq[j] if mask_seq is not None else None # [seq_len]
 
             metrics = compute_metrics_per_sequence(est, lbl, mask)
 
@@ -966,6 +965,241 @@ def save_metrics_to_file(category_metrics: Dict, label_names: List[str], save_di
         f.write("=" * 80 + "\n")
 
     print(f"测试结果已保存到: {save_path}")
+
+
+def generate_boxplots_for_categories(
+        category_metrics: Dict,
+        label_names: List[str],
+        save_dir: str,
+        config,
+        all_estimates: List,
+        all_labels: List,
+        all_masks: List,
+        trial_names: List[str]
+):
+    """
+    生成所有类别的箱线图
+
+    参数:
+        category_metrics: 类别指标字典
+        label_names: 标签名称列表
+        save_dir: 保存目录
+        config: 配置对象
+        all_estimates: 所有预测值列表
+        all_labels: 所有标签值列表
+        all_masks: 所有掩码列表（如有）
+        trial_names: 试验名称列表
+    """
+
+    # 生成箱线图
+    if getattr(config, 'generate_boxplots', False):
+        print("\n生成箱线图...")
+
+        # 三大类别的箱线图
+        if getattr(config, 'plot_categories', True):
+            create_boxplots(
+                category_metrics,
+                label_names,
+                save_dir,
+                categories_to_plot=['Cyclic', 'Impedance-like', 'Unstructured']
+            )
+
+        # 未见任务的箱线图（如果存在）
+        if getattr(config, 'plot_unseen', True) and 'Unseen' in category_metrics:
+            # 为未见任务创建单独的图（与某个基准类别对比）
+            # 这里我们创建一个包含All和Unseen的对比图
+            for label_name in label_names:
+                fig, axes = plt.subplots(1, 3, figsize=(12, 5))
+                fig.suptitle(f'{label_name} - All vs Unseen Tasks', fontsize=16, fontweight='bold')
+
+                metric_info = {
+                    'rmse': {'name': 'RMSE', 'ylabel': 'RMSE (Nm/kg)'},
+                    'r2': {'name': 'R²', 'ylabel': 'R²'},
+                    'mae_percent': {'name': 'MAE', 'ylabel': 'Normalized MAE (%)'}
+                }
+
+                for metric_idx, (metric_key, metric_data) in enumerate(metric_info.items()):
+                    ax = axes[metric_idx]
+
+                    data_to_plot = []
+                    positions = []
+                    labels_plot = []
+
+                    for cat_idx, category in enumerate(['All', 'Unseen']):
+                        if category in category_metrics and label_name in category_metrics[category]:
+                            values = category_metrics[category][label_name].get(metric_key, [])
+                            if values:
+                                data_to_plot.append(values)
+                                positions.append(cat_idx + 1)
+                                labels_plot.append(category)
+
+                    if data_to_plot:
+                        bp = ax.boxplot(data_to_plot, positions=positions, widths=0.6,
+                                        patch_artist=True, showfliers=True,
+                                        boxprops=dict(facecolor='lightblue', edgecolor='black', linewidth=1.5),
+                                        medianprops=dict(color='black', linewidth=2),
+                                        whiskerprops=dict(color='black', linewidth=1.5),
+                                        capprops=dict(color='black', linewidth=1.5))
+
+                        # 添加均值
+                        for i, values in enumerate(data_to_plot):
+                            mean_val = sum(values) / len(values)
+                            ax.plot(positions[i], mean_val, marker='s', markersize=6,
+                                    color='black', zorder=3)
+
+                        ax.set_title(metric_data['name'], fontsize=14, fontweight='bold')
+                        ax.set_ylabel(metric_data['ylabel'], fontsize=12)
+                        ax.set_xticks(positions)
+                        ax.set_xticklabels(labels_plot, fontsize=11)
+                        ax.grid(axis='y', alpha=0.3, linestyle='--')
+
+                        if metric_key == 'r2':
+                            ax.set_facecolor('#f0f0f0')
+
+                plt.tight_layout()
+                save_path = os.path.join(save_dir, f'boxplot_{label_name}_All_vs_Unseen.png')
+                plt.savefig(save_path, dpi=300, bbox_inches='tight')
+                print(f"箱线图已保存: {save_path}")
+                plt.close()
+
+        # 额外的自定义组别箱线图
+        additional_groups = getattr(config, 'additional_plot_groups', [])
+        for group in additional_groups:
+            group_name = group.get('name', 'Custom')
+            group_patterns = group.get('patterns', [])
+
+            if not group_patterns:
+                continue
+
+            # 为这个组创建临时的类别映射
+            temp_category_map = {pattern: group_name for pattern in group_patterns}
+
+            # 计算这个组的指标
+            temp_metrics = compute_category_metrics(
+                all_estimates,
+                all_labels,
+                all_masks,
+                trial_names,
+                label_names,
+                temp_category_map,
+                []  # 不考虑unseen
+            )
+
+            # 如果有数据，创建箱线图
+            if group_name in temp_metrics:
+                create_boxplots(
+                    temp_metrics,
+                    label_names,
+                    save_dir,
+                    categories_to_plot=[group_name]
+                )
+
+def to_cpu(obj):
+    if isinstance(obj, torch.Tensor):
+        return obj.detach().cpu()
+    if isinstance(obj, dict):
+        return {k: to_cpu(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        t = [to_cpu(x) for x in obj]
+        return type(obj)(t) if isinstance(obj, tuple) else t
+    return obj
+
+def save_predictions_and_labels(
+        all_estimates: List,
+        all_labels: List,
+        all_masks: List,
+        trial_names: List[str],
+        save_dir: str
+):
+    """
+    保存预测值、真值、掩码和试验名称
+
+    参数:
+        all_estimates: 预测值列表，包含torch.tensor
+        all_labels: 真值列表，包含torch.tensor
+        all_masks: 掩码列表，包含torch.tensor（如有）
+        trial_names: 试验名称列表
+        save_dir: 保存目录
+    """
+    save_path = os.path.join(save_dir, 'predictions_and_labels.pt')
+
+    # 准备要保存的数据
+    save_data = {
+        'all_estimates': to_cpu(all_estimates),
+        'all_labels': to_cpu(all_labels),
+        'trial_names': trial_names
+    }
+
+    # 如果有掩码数据，也保存
+    if all_masks is not None:
+        save_data['all_masks'] = to_cpu(all_masks)
+
+    # 保存数据
+    torch.save(save_data, save_path)
+    print(f"\n预测结果已保存到: {save_path}")
+    print(f"  - 试验数量: {len(trial_names)}")
+    print(f"  - 预测值列表长度: {len(all_estimates)}")
+    print(f"  - 真值列表长度: {len(all_labels)}")
+    if all_masks is not None:
+        print(f"  - 掩码列表长度: {len(all_masks)}")
+
+def save_predictions_and_labels_np(
+        all_estimates: List,
+        all_labels: List,
+        all_masks: List,
+        trial_names: List[str],
+        save_dir: str
+):
+    """
+    保存预测值、真值、掩码和试验名称到npz文件
+
+    参数:
+        all_estimates: 预测值列表，包含torch.tensor
+        all_labels: 真值列表，包含torch.tensor
+        all_masks: 掩码列表，包含torch.tensor（如有）
+        trial_names: 试验名称列表
+        save_dir: 保存目录
+    """
+    save_path = os.path.join(save_dir, 'predictions_and_labels.npz')
+
+    # 将torch.tensor转换为numpy数组
+    estimates_np = [est.cpu().numpy() for est in all_estimates]
+    labels_np = [lbl.cpu().numpy() for lbl in all_labels]
+
+    # 准备要保存的数据字典
+    save_data = {
+        'trial_names': np.array(trial_names, dtype=str)
+    }
+
+    # 保存预测值和真值（使用索引命名以支持不同长度的数组）
+    for i, (est, lbl) in enumerate(zip(estimates_np, labels_np)):
+        save_data[f'estimate_{i}'] = est
+        save_data[f'label_{i}'] = lbl
+
+    # 如果有掩码数据，也保存
+    if all_masks is not None:
+        masks_np = [mask.cpu().numpy() for mask in all_masks]
+        for i, mask in enumerate(masks_np):
+            save_data[f'mask_{i}'] = mask
+
+    # 保存元数据
+    save_data['num_trials'] = np.array(len(trial_names))
+    save_data['has_masks'] = np.array(all_masks is not None)
+
+    # 保存数据
+    np.savez(save_path, **save_data)
+
+    print(f"\n预测结果已保存到: {save_path}")
+    print(f"  - 试验数量: {len(trial_names)}")
+    print(f"  - 预测值列表长度: {len(all_estimates)}")
+    print(f"  - 真值列表长度: {len(all_labels)}")
+    if all_masks is not None:
+        print(f"  - 掩码列表长度: {len(all_masks)}")
+
+    # 打印文件大小信息
+    file_size_mb = os.path.getsize(save_path) / (1024 * 1024)
+    print(f"  - 文件大小: {file_size_mb:.2f} MB")
+
 
 if __name__ == '__main__':
 

@@ -4,7 +4,6 @@ import torch
 # ==================== 模型选择 ====================
 # 模型类型: 'TCN', 'Transformer', 或 'GenerativeTransformer'
 model_type = 'TCN'
-# model_type = 'GenerativeTransformer'
 
 # ==================== 数据配置 ====================
 
@@ -21,7 +20,7 @@ side = "r"
 # 是否启用activity_flag掩码功能
 # True: 读取activity_flag.csv文件，只在掩码为1的位置计算损失和指标
 # False: 不使用activity_flag，在所有位置计算损失和指标
-activity_flag = True
+activity_flag = False
 
 # 模型输入特征名称(* 会被替换为 side)
 input_names = [
@@ -89,7 +88,7 @@ label_names = ["hip_flexion_*_moment", "knee_angle_*_moment"]
 
 # 模型预测的延迟(单位:数据点)
 # 数据采样率为200Hz,每个点代表5ms
-model_delays = [10, 0]
+model_delays = [0, 0]
 
 # 参与者体重字典(单位:kg)
 participant_masses = {
@@ -129,7 +128,8 @@ scale = torch.tensor([
 # ==================== TCN专用配置 ====================
 
 # TCN每层的通道数
-num_channels = [64, 128, 256]
+num_channels = [64, 64]
+# num_channels = [64, 128, 256]
 
 # 卷积核大小
 ksize = 3
@@ -198,7 +198,7 @@ teacher_forcing_ratio = 1.0
 num_epochs = 2000
 
 # 批次大小
-batch_size = 8
+batch_size = 32
 
 # 测试批次大小（可以与训练批次大小不同）
 test_batch_size = 64

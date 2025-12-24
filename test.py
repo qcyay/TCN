@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 # 设置Matplotlib使用Agg后端（无图形界面）
 import matplotlib
-matplotlib.use('Agg')  # 关键：使用非交互式后端
+matplotlib.use('Agg')  # 关键:使用非交互式后端
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from torch.utils.data import DataLoader
@@ -98,7 +98,7 @@ def main():
             remove_nan=True,
             action_patterns=getattr(config, 'action_patterns', None),
             enable_action_filter=getattr(config, 'enable_action_filter', False),
-            activity_flag=config.activity_flag,
+            activity_flag=getattr(config, 'activity_flag', False),
             min_sequence_length=getattr(config, 'min_sequence_length', -1)
         )
 
@@ -120,7 +120,7 @@ def main():
         # 进行测试 - 收集所有预测和标签
         all_estimates = []
         all_labels = []
-        all_masks = [] if config.activity_flag else None
+        all_masks = [] if getattr(config, 'activity_flag', False) else None
 
         print("\n开始预测...")
         with torch.no_grad():
@@ -205,23 +205,18 @@ def main():
             remove_nan=True,
             action_patterns=getattr(config, 'action_patterns', None),
             enable_action_filter=getattr(config, 'enable_action_filter', False),
-            activity_flag=config.activity_flag,
+            activity_flag=getattr(config, 'activity_flag', False),
             min_sequence_length=getattr(config, 'min_sequence_length', -1)
         )
 
-        test_loader = DataLoader(
-            test_dataset,
-            batch_size=1,  # TCN使用batch_size=1避免长度不一致
-            shuffle=False,
-            collate_fn=collate_fn_tcn
-        )
+        test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, collate_fn=collate_fn_tcn)
 
         print(f"测试集大小: {len(test_dataset)} 个试验")
 
         # 进行测试 - 逐个处理并收集完整序列
         all_estimates = []
         all_labels = []
-        all_masks = [] if config.activity_flag else None
+        all_masks = [] if getattr(config, 'activity_flag', False) else None
 
         print("\n开始预测...")
         with torch.no_grad():
@@ -315,107 +310,26 @@ def main():
     save_metrics_to_file(category_metrics, label_names, save_dir)
 
     # 生成箱线图
-    if getattr(config, 'generate_boxplots', True):
-        print("\n生成箱线图...")
+    generate_boxplots_for_categories(
+        category_metrics,
+        label_names,
+        save_dir,
+        config,
+        all_estimates,
+        all_labels,
+        all_masks,
+        trial_names
+    )
 
-        # 三大类别的箱线图
-        if getattr(config, 'plot_categories', True):
-            create_boxplots(
-                category_metrics,
-                label_names,
-                save_dir,
-                categories_to_plot=['Cyclic', 'Impedance-like', 'Unstructured']
-            )
-
-        # 未见任务的箱线图（如果存在）
-        if getattr(config, 'plot_unseen', True) and 'Unseen' in category_metrics:
-            # 为未见任务创建单独的图（与某个基准类别对比）
-            # 这里我们创建一个包含All和Unseen的对比图
-            for label_name in label_names:
-                fig, axes = plt.subplots(1, 3, figsize=(12, 5))
-                fig.suptitle(f'{label_name} - All vs Unseen Tasks', fontsize=16, fontweight='bold')
-
-                metric_info = {
-                    'rmse': {'name': 'RMSE', 'ylabel': 'RMSE (Nm/kg)'},
-                    'r2': {'name': 'R²', 'ylabel': 'R²'},
-                    'mae_percent': {'name': 'MAE', 'ylabel': 'Normalized MAE (%)'}
-                }
-
-                for metric_idx, (metric_key, metric_data) in enumerate(metric_info.items()):
-                    ax = axes[metric_idx]
-
-                    data_to_plot = []
-                    positions = []
-                    labels_plot = []
-
-                    for cat_idx, category in enumerate(['All', 'Unseen']):
-                        if category in category_metrics and label_name in category_metrics[category]:
-                            values = category_metrics[category][label_name].get(metric_key, [])
-                            if values:
-                                data_to_plot.append(values)
-                                positions.append(cat_idx + 1)
-                                labels_plot.append(category)
-
-                    if data_to_plot:
-                        bp = ax.boxplot(data_to_plot, positions=positions, widths=0.6,
-                                        patch_artist=True, showfliers=True,
-                                        boxprops=dict(facecolor='lightblue', edgecolor='black', linewidth=1.5),
-                                        medianprops=dict(color='black', linewidth=2),
-                                        whiskerprops=dict(color='black', linewidth=1.5),
-                                        capprops=dict(color='black', linewidth=1.5))
-
-                        # 添加均值
-                        for i, values in enumerate(data_to_plot):
-                            mean_val = sum(values) / len(values)
-                            ax.plot(positions[i], mean_val, marker='s', markersize=6,
-                                    color='black', zorder=3)
-
-                        ax.set_title(metric_data['name'], fontsize=14, fontweight='bold')
-                        ax.set_ylabel(metric_data['ylabel'], fontsize=12)
-                        ax.set_xticks(positions)
-                        ax.set_xticklabels(labels_plot, fontsize=11)
-                        ax.grid(axis='y', alpha=0.3, linestyle='--')
-
-                        if metric_key == 'r2':
-                            ax.set_facecolor('#f0f0f0')
-
-                plt.tight_layout()
-                save_path = os.path.join(save_dir, f'boxplot_{label_name}_All_vs_Unseen.png')
-                plt.savefig(save_path, dpi=300, bbox_inches='tight')
-                print(f"箱线图已保存: {save_path}")
-                plt.close()
-
-        # 额外的自定义组别箱线图
-        additional_groups = getattr(config, 'additional_plot_groups', [])
-        for group in additional_groups:
-            group_name = group.get('name', 'Custom')
-            group_patterns = group.get('patterns', [])
-
-            if not group_patterns:
-                continue
-
-            # 为这个组创建临时的类别映射
-            temp_category_map = {pattern: group_name for pattern in group_patterns}
-
-            # 计算这个组的指标
-            temp_metrics = compute_category_metrics(
-                all_estimates,
-                all_labels,
-                all_masks,
-                trial_names,
-                label_names,
-                temp_category_map,
-                []  # 不考虑unseen
-            )
-
-            # 如果有数据，创建箱线图
-            if group_name in temp_metrics:
-                create_boxplots(
-                    temp_metrics,
-                    label_names,
-                    save_dir,
-                    categories_to_plot=[group_name]
-                )
+    # 保存预测结果和真值
+    print("\n保存预测结果...")
+    save_predictions_and_labels(
+        all_estimates,
+        all_labels,
+        all_masks,
+        trial_names,
+        save_dir
+    )
 
     print("\n测试完成!")
 

@@ -87,8 +87,8 @@ class SequenceDataset(Dataset):
         # 获取试验名称列表
         self.trial_names = self._get_trial_names()
 
-        # ## 测试,正式训练时改行需要注释
-        # self.trial_names = self.trial_names[:10]
+        ## 测试,正式训练时改行需要注释
+        self.trial_names = self.trial_names[:10]
 
         # 统计信息
         self.nan_removal_stats = {
@@ -403,11 +403,9 @@ class SequenceDataset(Dataset):
             # 只保留有效的数据
             self.all_input_data = [self.all_input_data[i] for i in valid_indices]
             self.all_label_data = [self.all_label_data[i] for i in valid_indices]
+            self.all_mask_data = [self.all_mask_data[i] for i in valid_indices]
             self.trial_lengths = [self.trial_lengths[i] for i in valid_indices]
             self.trial_names = [self.trial_names[i] for i in valid_indices]
-
-            if self.activity_flag:
-                self.all_mask_data = [self.all_mask_data[i] for i in valid_indices]
         else:
             print(f"  所有试验的序列长度均满足要求,无需过滤")
 

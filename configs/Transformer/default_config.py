@@ -5,7 +5,6 @@ import torch
 # 模型类型: 'TCN', 'Transformer', 或 'GenerativeTransformer'
 # model_type = 'TCN'
 model_type = 'Transformer'
-# model_type = 'GenerativeTransformer'
 
 # ==================== 数据配置 ====================
 
@@ -22,7 +21,7 @@ side = "r"
 # 是否启用activity_flag掩码功能
 # True: 读取activity_flag.csv文件，只在掩码为1的位置计算损失和指标
 # False: 不使用activity_flag，在所有位置计算损失和指标
-activity_flag = True
+activity_flag = False
 
 # 模型输入特征名称(* 会被替换为 side)
 input_names = [
@@ -40,7 +39,7 @@ input_names = [
 # ==================== 序列长度过滤配置 ====================
 # 允许加载的最小序列长度（单位：采样点，200Hz，每点=5ms）
 # -1 表示不限制序列长度（默认行为）
-min_sequence_length = -1
+min_sequence_length = 500
 
 # ==================== 特征选择配置 ====================
 # 是否启用特征选择（False时使用所有特征）
@@ -121,7 +120,7 @@ action_patterns = [
 # ==================== 可视化配置 ====================
 
 # 是否生成箱线图
-generate_boxplots = True
+generate_boxplots = False
 
 # 是否为三大类别生成箱线图（Cyclic, Impedance-like, Unstructured）
 plot_categories = True
@@ -228,13 +227,13 @@ sequence_length = 200
 # 输出序列长度（预测或生成的序列长度）
 # 对于预测模型：决定预测的时间步数
 # 对于生成式模型：决定生成的时间步数
-output_sequence_length = 5
+output_sequence_length = 1
 
 # Transformer隐藏维度
 d_model = 128
 
 # 注意力头数
-nhead = 8
+nhead = 4
 
 # Encoder层数
 num_encoder_layers = 3
@@ -274,7 +273,7 @@ teacher_forcing_ratio = 1.0
 # 'only_first': 每个短序列只取第一个预测值（推荐，速度快，接近实际使用）
 # 'average': 对每个位置的所有预测值取平均（结果更平滑，但计算慢）
 # 注意：TCN模型不使用此参数
-reconstruction_method = 'average'
+reconstruction_method = 'only_first'
 
 # ==================== 训练配置 ====================
 
@@ -282,7 +281,7 @@ reconstruction_method = 'average'
 num_epochs = 500
 
 # 训练批次大小
-batch_size = 128
+batch_size = 64
 
 # 测试批次大小（可以与训练批次大小不同）
 test_batch_size = 1024
