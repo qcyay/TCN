@@ -724,6 +724,7 @@ def compute_metrics_per_sequence(
 
     return {'rmse': rmse, 'r2': r2, 'mae_percent': mae_percent}
 
+
 def compute_category_metrics(
         estimates_list: List[torch.Tensor],
         labels_list: List[torch.Tensor],
@@ -739,18 +740,20 @@ def compute_category_metrics(
     参数:
         estimates_list: List[Tensor[num_outputs, seq_len]] 每个trial的预测序列
         labels_list: List[Tensor[num_outputs, seq_len]] 每个trial的标签序列
+        masks_list: List[Tensor[seq_len]] 每个trial的掩码（可能为None）
         trial_names: 试验名称列表
         label_names: 标签名称列表
         action_to_category: 运动类型到类别的映射
         unseen_patterns: 未见过任务的正则表达式列表
 
     返回:
-        category_metrics: 嵌套字典 {category: {label_name: {metric: [values]}}}
+        category_metrics: 嵌套字典 {category: {label_name: {metric: [values], 'trial_info': [info_dicts]}}}
     """
     num_outputs = len(label_names)
 
     # 初始化存储结构
     # category_metrics[category][label_name][metric] = [value1, value2, ...]
+    # category_metrics[category][label_name]['trial_info'] = [info_dict1, info_dict2, ...]
     category_metrics = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
 
     # 根据masks_list是否为None创建迭代器
@@ -763,15 +766,25 @@ def compute_category_metrics(
         # 判断是否为未见过的任务
         is_unseen = check_unseen_task(trial_name, unseen_patterns)
 
+        # 获取序列长度（使用第一个输出通道的长度）
+        seq_length = est_seq.shape[1] if est_seq.ndim > 1 else len(est_seq)
+
         # 对每个输出通道计算指标
         for j, label_name in enumerate(label_names):
             est = est_seq[j]  # [seq_len]
             lbl = lbl_seq[j]  # [seq_len]
-            mask = mask_seq[j] if mask_seq is not None else None # [seq_len]
+            mask = mask_seq if mask_seq is not None else None  # [seq_len] - mask对所有通道共享
 
             metrics = compute_metrics_per_sequence(est, lbl, mask)
 
             if metrics is not None:
+                # 创建trial信息字典
+                trial_info = {
+                    'trial_name': trial_name,
+                    'category': category if not is_unseen else 'Unseen',
+                    'sequence_length': seq_length
+                }
+
                 # 添加到对应类别
                 category_metrics[category][label_name]['rmse'].append(metrics['rmse'])
                 category_metrics[category][label_name]['r2'].append(metrics['r2'])
@@ -781,6 +794,7 @@ def compute_category_metrics(
                 category_metrics['All'][label_name]['rmse'].append(metrics['rmse'])
                 category_metrics['All'][label_name]['r2'].append(metrics['r2'])
                 category_metrics['All'][label_name]['mae_percent'].append(metrics['mae_percent'])
+                category_metrics['All'][label_name]['trial_info'].append(trial_info.copy())
 
                 # 如果是未见过的任务，额外添加到Unseen类别
                 if is_unseen:
@@ -1104,21 +1118,33 @@ def to_cpu(obj):
         return type(obj)(t) if isinstance(obj, tuple) else t
     return obj
 
+def defaultdict_to_dict(obj):
+    if isinstance(obj, defaultdict):
+        obj = dict(obj)
+    if isinstance(obj, dict):
+        return {k: defaultdict_to_dict(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        t = [defaultdict_to_dict(x) for x in obj]
+        return type(obj)(t) if isinstance(obj, tuple) else t
+    return obj
+
 def save_predictions_and_labels(
         all_estimates: List,
         all_labels: List,
         all_masks: List,
         trial_names: List[str],
+        category_metrics: Dict,
         save_dir: str
 ):
     """
-    保存预测值、真值、掩码和试验名称
+    保存预测值、真值、掩码、试验名称和类别指标到.pt文件
 
     参数:
         all_estimates: 预测值列表，包含torch.tensor
         all_labels: 真值列表，包含torch.tensor
         all_masks: 掩码列表，包含torch.tensor（如有）
         trial_names: 试验名称列表
+        category_metrics: 类别指标字典
         save_dir: 保存目录
     """
     save_path = os.path.join(save_dir, 'predictions_and_labels.pt')
@@ -1127,12 +1153,13 @@ def save_predictions_and_labels(
     save_data = {
         'all_estimates': to_cpu(all_estimates),
         'all_labels': to_cpu(all_labels),
-        'trial_names': trial_names
+        'trial_names': trial_names,
+        'category_metrics': defaultdict_to_dict(category_metrics)
     }
 
     # 如果有掩码数据，也保存
     if all_masks is not None:
-        save_data['all_masks'] = to_cpu(all_masks)
+        save_data['all_masks'] = all_masks
 
     # 保存数据
     torch.save(save_data, save_path)
@@ -1142,22 +1169,57 @@ def save_predictions_and_labels(
     print(f"  - 真值列表长度: {len(all_labels)}")
     if all_masks is not None:
         print(f"  - 掩码列表长度: {len(all_masks)}")
+    print(f"  - 类别数量: {len(category_metrics)}")
+
+    # 打印文件大小信息
+    file_size_mb = os.path.getsize(save_path) / (1024 * 1024)
+    print(f"  - 文件大小: {file_size_mb:.2f} MB")
+
+def _convert_metrics_to_serializable(metrics_dict: Dict) -> Dict:
+    """
+    将category_metrics转换为可JSON序列化的格式
+
+    参数:
+        metrics_dict: 原始的category_metrics字典
+
+    返回:
+        可序列化的字典
+    """
+    serializable = {}
+
+    for category, label_dict in metrics_dict.items():
+        serializable[category] = {}
+
+        for label_name, metric_dict in label_dict.items():
+            serializable[category][label_name] = {}
+
+            for metric_name, values in metric_dict.items():
+                if metric_name == 'trial_info':
+                    # trial_info已经是字典列表，可以直接序列化
+                    serializable[category][label_name][metric_name] = values
+                else:
+                    # 其他指标是数值列表
+                    serializable[category][label_name][metric_name] = values
+
+    return serializable
 
 def save_predictions_and_labels_np(
         all_estimates: List,
         all_labels: List,
         all_masks: List,
         trial_names: List[str],
+        category_metrics: Dict,
         save_dir: str
 ):
     """
-    保存预测值、真值、掩码和试验名称到npz文件
+    保存预测值、真值、掩码、试验名称和类别指标到npz文件
 
     参数:
         all_estimates: 预测值列表，包含torch.tensor
         all_labels: 真值列表，包含torch.tensor
         all_masks: 掩码列表，包含torch.tensor（如有）
         trial_names: 试验名称列表
+        category_metrics: 类别指标字典
         save_dir: 保存目录
     """
     save_path = os.path.join(save_dir, 'predictions_and_labels.npz')
@@ -1167,9 +1229,7 @@ def save_predictions_and_labels_np(
     labels_np = [lbl.cpu().numpy() for lbl in all_labels]
 
     # 准备要保存的数据字典
-    save_data = {
-        'trial_names': np.array(trial_names, dtype=str)
-    }
+    save_data = {'trial_names': np.array(trial_names, dtype=str)}
 
     # 保存预测值和真值（使用索引命名以支持不同长度的数组）
     for i, (est, lbl) in enumerate(zip(estimates_np, labels_np)):
@@ -1186,6 +1246,11 @@ def save_predictions_and_labels_np(
     save_data['num_trials'] = np.array(len(trial_names))
     save_data['has_masks'] = np.array(all_masks is not None)
 
+    # 保存category_metrics（将其转换为可序列化格式）
+    # 由于npz只能保存numpy数组，我们将category_metrics转换为JSON字符串
+    category_metrics_serializable = _convert_metrics_to_serializable(category_metrics)
+    save_data['category_metrics'] = np.array(json.dumps(category_metrics_serializable), dtype=object)
+
     # 保存数据
     np.savez(save_path, **save_data)
 
@@ -1195,6 +1260,7 @@ def save_predictions_and_labels_np(
     print(f"  - 真值列表长度: {len(all_labels)}")
     if all_masks is not None:
         print(f"  - 掩码列表长度: {len(all_masks)}")
+    print(f"  - 类别数量: {len(category_metrics)}")
 
     # 打印文件大小信息
     file_size_mb = os.path.getsize(save_path) / (1024 * 1024)

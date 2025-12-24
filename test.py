@@ -11,6 +11,7 @@ matplotlib.use('Agg')  # 关键:使用非交互式后端
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 from utils.config_utils import *
 from utils.utils import *
 from models.predictor_model import PredictorTransformer
@@ -127,7 +128,7 @@ def main():
             if model_type == "GenerativeTransformer":
                 if args.use_generation:
                     print("使用自回归生成模式...")
-                    for batch_idx, batch_data in enumerate(test_loader):
+                    for batch_idx, batch_data in enumerate(tqdm(test_loader, desc="预测进度")):
                         input_data, _, label_data = batch_data
                         input_data = input_data.to(device)
                         label_data = label_data.to(device)
@@ -139,7 +140,7 @@ def main():
                         all_labels.append(label_data)
                 else:
                     print("使用Teacher Forcing模式...")
-                    for batch_idx, batch_data in enumerate(test_loader):
+                    for batch_idx, batch_data in enumerate(tqdm(test_loader, desc="预测进度")):
                         input_data, shifted_label_data, label_data = batch_data
                         input_data = input_data.to(device)
                         shifted_label_data = shifted_label_data.to(device)
@@ -154,7 +155,7 @@ def main():
                         all_estimates.append(estimates)
                         all_labels.append(label_data)
             else:  # Transformer预测模型
-                for batch_idx, (input_data, label_data, mask_data) in enumerate(test_loader):
+                for batch_idx, (input_data, label_data, mask_data) in enumerate(tqdm(test_loader, desc="预测进度")):
                     # 尺寸为[B,num_input_features,sequence_length]
                     input_data = input_data.to(device)
                     # 尺寸为[B,num_outputs,sequence_length]
@@ -220,7 +221,7 @@ def main():
 
         print("\n开始预测...")
         with torch.no_grad():
-            for input_data, label_data, trial_lengths, activity_masks in test_loader:
+            for input_data, label_data, trial_lengths, activity_masks in tqdm(test_loader, desc="预测进度"):
                 input_data = input_data.to(device)
                 label_data = label_data.to(device)
 
@@ -328,6 +329,7 @@ def main():
         all_labels,
         all_masks,
         trial_names,
+        category_metrics,
         save_dir
     )
 
