@@ -6,6 +6,7 @@ import random
 import numpy as np
 import torch
 import torch.nn as nn
+from torch.nn import SmoothL1Loss  # 用于Huber Loss
 import torch.optim as optim
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
@@ -43,7 +44,7 @@ def validate(model: nn.Module, dataloader: DataLoader, label_names: List[str], d
         reconstruction_method: 'only_first' 或 'average'
     """
     model.eval()
-    criterion = nn.MSELoss()
+    criterion = get_loss_function(config)
 
     total_loss = 0.0
     num_batches = 0
@@ -275,6 +276,11 @@ def main():
     log_to_file(train_log_path, f"随机种子: {config.random_seed}")
     if config.model_type in ['Transformer', 'GenerativeTransformer']:
         log_to_file(train_log_path, f"序列重组方法: {reconstruction_method}")
+    loss_function_name = getattr(config, 'loss_function', 'l2')
+    log_to_file(train_log_path, f"损失函数: {loss_function_name}")
+    if loss_function_name.lower() == 'huber':
+        huber_delta = getattr(config, 'huber_delta', 1.0)
+        log_to_file(train_log_path, f"Huber delta: {huber_delta}")
     log_to_file(train_log_path, f"{'=' * 60}")
 
     # 创建模型
@@ -371,7 +377,7 @@ def main():
         mode='min'
     )
 
-    criterion = nn.MSELoss()
+    criterion = get_criterion(config)
 
     if args.resume and os.path.exists(args.resume):
         checkpoint = torch.load(args.resume, map_location=device)

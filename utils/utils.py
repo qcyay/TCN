@@ -432,6 +432,37 @@ def copy_config_file(config_path: str, save_dir: str):
         for path in possible_paths:
             print(f"    - {path}")
 
+
+def get_criterion(config):
+    """
+    根据配置选择损失函数
+
+    参数:
+        config: 配置对象
+
+    返回:
+        criterion: 损失函数
+    """
+    loss_function = getattr(config, 'loss_function', 'l2').lower()
+
+    if loss_function == 'l1':
+        criterion = nn.L1Loss()
+        loss_name = "L1Loss (MAE)"
+    elif loss_function == 'l2':
+        criterion = nn.MSELoss()
+        loss_name = "MSELoss"
+    elif loss_function == 'huber':
+        huber_delta = getattr(config, 'huber_delta', 1.0)
+        criterion = nn.SmoothL1Loss(beta=huber_delta)
+        loss_name = f"Huber Loss (delta={huber_delta})"
+    else:
+        print(f"警告: 未知的损失函数类型 '{loss_function}'，使用默认的MSELoss")
+        criterion = nn.MSELoss()
+        loss_name = "MSELoss (默认)"
+
+    print(f"损失函数: {loss_name}")
+    return criterion
+
 def reconstruct_sequences(
         all_estimates: torch.Tensor,
         all_labels: torch.Tensor,
