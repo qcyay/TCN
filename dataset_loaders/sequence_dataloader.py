@@ -4,6 +4,7 @@ from typing import List, Dict, Optional, Tuple
 import pandas as pd
 import torch
 from torch.utils.data import Dataset
+from tqdm import tqdm
 import numpy as np
 
 class SequenceDataset(Dataset):
@@ -32,7 +33,10 @@ class SequenceDataset(Dataset):
                  action_patterns: Optional[List[str]] = None,
                  enable_action_filter: bool = False,
                  activity_flag: bool = False,
-                 min_sequence_length: int = -1):
+                 min_sequence_length: int = -1,
+                 use_synthetic_data: bool = False,
+                 synthetic_data_prob: float = 0.2,
+                 synthetic_log_id: int = 0):
         """
         初始化序列数据集
 
@@ -73,6 +77,9 @@ class SequenceDataset(Dataset):
         self.enable_action_filter = enable_action_filter
         self.activity_flag = activity_flag
         self.min_sequence_length = min_sequence_length
+        self.use_synthetic_data = use_synthetic_data
+        self.synthetic_data_prob = synthetic_data_prob
+        self.synthetic_log_id = synthetic_log_id
 
         # 设置文件后缀映射
         if file_suffix is None:
@@ -113,8 +120,12 @@ class SequenceDataset(Dataset):
         # 预加载所有数据到内存
         self.all_input_data = []  # 存储所有试验的输入数据
         self.all_label_data = []  # 存储所有试验的标签数据
-        self.trial_lengths = []  # 存储每个试验的原始长度
         self.all_mask_data = []  # 存储所有试验的动作掩码
+        self.trial_lengths = []  # 存储每个试验的原始长度
+        self.all_synthetic_input_data = []  # 存储所有虚拟试验的输入数据
+        self.all_synthetic_label_data = []  # 存储所有虚拟试验的标签数据
+        self.all_synthetic_mask_data = []  # 存储所有虚拟试验的动作掩码
+        self.synthetic_trial_lengths = []  # 存储每个虚拟试验的原始长度
         self._preload_all_data()
 
         # === 根据min_sequence_length过滤序列 ===
@@ -124,6 +135,10 @@ class SequenceDataset(Dataset):
         # === 检测并移除标签全为NaN的序列 ===
         self._remove_invalid_label_sequences()
 
+        # === 合并虚拟数据（如果启用）===
+        if self.mode == 'train' and self.use_synthetic_data:
+            self._merge_synthetic_data()
+
         # 生成序列索引
         print(f"生成序列索引...")
         self.sequences = self._generate_sequences()
@@ -132,7 +147,8 @@ class SequenceDataset(Dataset):
         self.trial_sequence_counts = self._compute_trial_sequence_counts()
 
         print(f"数据集初始化完成 - 模式: {self.mode}, "
-              f"试验数量: {len(self.trial_names)}, "
+              f"真实数据试验数量: {len(self.trial_names)}, "
+              f"虚拟数据试验数量: {len(self.all_synthetic_input_data)}, "
               f"序列数量: {len(self.sequences)}")
 
         # 打印序列长度过滤统计
@@ -344,7 +360,6 @@ class SequenceDataset(Dataset):
     def _preload_all_data(self):
         """
         预加载所有试验数据到内存（关键优化）
-        这样只需要在初始化时读取一次CSV文件
         """
         print("预加载所有试验数据到内存...")
 
@@ -355,7 +370,6 @@ class SequenceDataset(Dataset):
             # 加载单个试验数据
             # input_data,输入传感器数据,尺寸为[C,N],label_data,尺寸为[2,N],mask_data,数据掩码,尺寸为[N]
             input_data, label_data, mask_data = self._load_trial_data(trial_name)
-            # breakpoint()
 
             # 转换为numpy数组并存储
             self.all_input_data.append(input_data.numpy())
@@ -363,7 +377,84 @@ class SequenceDataset(Dataset):
             self.all_mask_data.append(mask_data.numpy())
             self.trial_lengths.append(input_data.shape[1])
 
-        print("所有数据预加载完成!")
+        print("所有真实数据预加载完成!")
+
+        if self.mode == 'train' and self.use_synthetic_data:
+            print("\n开始加载所有虚拟数据...")
+
+            # 构建虚拟数据路径
+            synthetic_data_dir = os.path.join(self.data_dir, 'synthetic_data', f'{self.synthetic_log_id}')
+
+            if not os.path.exists(synthetic_data_dir):
+                raise FileNotFoundError(f"警告: 虚拟数据目录不存在: {synthetic_data_dir}")
+
+            # 获取所有类别目录
+            class_dirs = sorted([d for d in os.listdir(synthetic_data_dir)
+                                 if d.startswith('class') and
+                                 os.path.isdir(os.path.join(synthetic_data_dir, d))])
+
+            print(f"找到 {len(class_dirs)} 个类别目录")
+
+            # 遍历每个类别目录
+            for class_dir in tqdm(class_dirs, desc="加载虚拟数据"):
+                class_path = os.path.join(synthetic_data_dir, class_dir)
+
+                # 获取该类别下所有CSV文件
+                csv_files = sorted([f for f in os.listdir(class_path) if f.endswith('.csv')])
+
+                # 遍历每个CSV文件
+                for csv_file in csv_files:
+                    csv_path = os.path.join(class_path, csv_file)
+
+                    # 加载虚拟数据
+                    input_data, label_data, mask_data = self._load_synthetic_data(csv_path)
+
+                    # 存储虚拟数据
+                    self.all_synthetic_input_data.append(input_data.numpy())
+                    self.all_synthetic_label_data.append(label_data.numpy())
+                    self.all_synthetic_mask_data.append(mask_data.numpy())
+                    self.synthetic_trial_lengths.append(input_data.shape[1])
+
+            # 计算真实数据和虚拟数据的比例
+            total_real_length = sum(self.trial_lengths)
+            total_synthetic_length = sum(self.synthetic_trial_lengths)
+
+            synthetic_ratio = total_synthetic_length / total_real_length
+            print(f"真实数据总长度: {total_real_length}, 虚拟数据总长度: {total_synthetic_length}")
+            print(f"\n虚拟数据与真实数据的比例: {synthetic_ratio:.4f}")
+
+            # 如果虚拟数据比例超过期望概率，进行截取
+            if synthetic_ratio > self.synthetic_data_prob:
+                # 计算需要保留的虚拟数据数量
+                target_synthetic_length = int(total_real_length * self.synthetic_data_prob)
+                num_synthetic_samples = len(self.all_synthetic_input_data)
+
+                # 计算平均每个样本的长度
+                avg_synthetic_length = total_synthetic_length / num_synthetic_samples
+
+                # 计算需要保留的样本数量
+                num_samples_to_keep = int(target_synthetic_length / avg_synthetic_length)
+                num_samples_to_keep = max(1, min(num_samples_to_keep, num_synthetic_samples))
+
+                print(f"虚拟数据过多，将从 {num_synthetic_samples} 个样本中随机保留 {num_samples_to_keep} 个")
+
+                # 生成随机索引并打乱
+                random_indices = np.random.permutation(num_synthetic_samples).tolist()
+                random_indices = random_indices[:num_samples_to_keep]
+
+                # 截取虚拟数据
+                self.all_synthetic_input_data = [self.all_synthetic_input_data[i] for i in random_indices]
+                self.all_synthetic_label_data = [self.all_synthetic_label_data[i] for i in random_indices]
+                self.all_synthetic_mask_data = [self.all_synthetic_mask_data[i] for i in random_indices]
+                self.synthetic_trial_lengths = [self.synthetic_trial_lengths[i] for i in random_indices]
+
+                # 更新总长度
+                total_synthetic_length = sum(self.synthetic_trial_lengths)
+                synthetic_ratio = total_synthetic_length / total_real_length
+                print(f"截取后的虚拟数据比例: {synthetic_ratio:.4f}")
+
+            print(f"所有虚拟数据预加载完成! 共 {len(self.all_synthetic_input_data)} 个样本")
+            print(f"真实数据总长度: {total_real_length}, 虚拟数据总长度: {total_synthetic_length}")
 
     def _filter_by_sequence_length(self):
         '''
@@ -459,6 +550,27 @@ class SequenceDataset(Dataset):
         else:
             print("  未发现标签全为NaN的序列")
 
+    def _merge_synthetic_data(self):
+        """
+        将虚拟数据合并到真实数据中
+        仅在训练模式且启用虚拟数据时调用
+        """
+
+        print("\n开始合并虚拟数据到训练集...")
+
+        # 记录合并前的数量
+        num_real_trials = len(self.all_input_data)
+        num_synthetic_trials = len(self.all_synthetic_input_data)
+
+        # 合并数据
+        self.all_input_data.extend(self.all_synthetic_input_data)
+        self.all_label_data.extend(self.all_synthetic_label_data)
+        self.all_mask_data.extend(self.all_synthetic_mask_data)
+        self.trial_lengths.extend(self.synthetic_trial_lengths)
+
+        print(f"合并完成: 真实试验 {num_real_trials} 个 + 虚拟试验 {num_synthetic_trials} 个 = 总计 {len(self.all_input_data)} 个")
+        print(f"真实数据总长度: {sum(self.trial_lengths[:num_real_trials])}, 虚拟数据总长度: {sum(self.trial_lengths[num_real_trials:])}")
+
     def _load_trial_data(self, trial_name: str) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
         '''
         加载单个试验的完整数据
@@ -501,7 +613,7 @@ class SequenceDataset(Dataset):
         if os.path.exists(activity_file_path):
             mask_data = self._load_activity_flag(activity_file_path, valid_range)
         else:
-            raise FileNotFoundError(f"activity_flag已启用但文件不存在: {activity_file_path}")
+            raise FileNotFoundError(f"文件不存在: {activity_file_path}")
 
         # 注意：不在这里应用延迟，延迟会在生成序列索引时处理
         return input_data, label_data, mask_data
@@ -589,6 +701,71 @@ class SequenceDataset(Dataset):
         activity_mask = torch.tensor(df[side_column].values, dtype=torch.float32)
         return activity_mask
 
+    def _load_synthetic_data(self, csv_path):
+        """
+        加载单个虚拟数据CSV文件
+
+        Args:
+            csv_path: CSV文件路径
+
+        Returns:
+            input_data: 输入数据 [num_input_features, sequence_length]
+            label_data: 标签数据 [num_label_features, sequence_length]
+            activity_mask: 活动掩码 [sequence_length] or None
+        """
+
+        # 读取CSV文件
+        df = pd.read_csv(csv_path)
+
+        # 体重标准化压力鞋垫数据
+        body_mass = df['participant_mass'].mean()
+        if "insole_l_force_y" in df.columns:
+            df.loc[:, "insole_l_force_y"] /= body_mass
+        if "insole_r_force_y" in df.columns:
+            df.loc[:, "insole_r_force_y"] /= body_mass
+
+        # 左侧数据镜像处理（如果当前使用的是左侧）
+        if self.side == 'l':
+            mirror_columns = [
+                "foot_imu_l_gyro_x", "foot_imu_l_gyro_y", "foot_imu_l_accel_z",
+                "shank_imu_l_gyro_x", "shank_imu_l_gyro_y", "shank_imu_l_accel_z",
+                "thigh_imu_l_gyro_x", "thigh_imu_l_gyro_y", "thigh_imu_l_accel_z",
+                "insole_l_cop_z"
+            ]
+            for col in mirror_columns:
+                if col in df.columns:
+                    df.loc[:, col] *= -1.0
+
+        # 检查是否有缺失的必需列
+        missing_cols = [col for col in self.input_names if col not in df.columns]
+        if missing_cols:
+            raise ValueError(f"输入数据缺失必需的列: {missing_cols}")
+
+        # 提取输入数据
+        input_data = df[self.input_names].values
+        input_data = torch.tensor(input_data, dtype=torch.float32).transpose(0, 1)
+
+        # 2. 处理标签数据
+        # 检查是否有缺失的必需列
+        missing_cols = [col for col in self.label_names if col not in df.columns]
+        if missing_cols:
+            raise ValueError(f"标签数据缺失必需的列: {missing_cols}")
+
+        # 提取标签数据
+        label_data = df[self.label_names].values
+        label_data = torch.tensor(label_data, dtype=torch.float32).transpose(0, 1)
+
+        # 3. 处理活动掩码（如果使用）
+        activity_flag_col = f'activity_flag_{self.side}'
+        if activity_flag_col in df.columns:
+            mask_data = df[activity_flag_col].values
+            mask_data = torch.tensor(mask_data, dtype=torch.bool)
+        else:
+            # 如果没有activity_flag列，默认全部为True
+            mask_data = torch.ones(len(df), dtype=torch.bool)
+
+        return input_data, label_data, mask_data
+
     def _generate_sequences(self) -> List[Tuple[int, int]]:
         '''
         生成所有可用的序列索引（关键优化）
@@ -607,7 +784,7 @@ class SequenceDataset(Dataset):
         # 计算最大延迟（用于确定所需的数据长度）
         max_delay = max(self.model_delays)
 
-        for trial_idx in range(len(self.trial_names)):
+        for trial_idx in range(len(self.all_input_data)):
             # 获取该试验的数据长度
             input_len = self.all_input_data[trial_idx].shape[1]
             label_len = self.all_label_data[trial_idx].shape[1]
@@ -639,7 +816,7 @@ class SequenceDataset(Dataset):
         计算每个trial生成的子序列数量
         返回列表，索引对应trial_idx，值为该trial的子序列数量
         """
-        counts = [0] * len(self.trial_names)
+        counts = [0] * len(self.all_input_data)
         for trial_idx, _ in self.sequences:
             counts[trial_idx] += 1
         return counts
@@ -715,9 +892,10 @@ def main():
                            start_token_value=config.start_token_value if config.model_type == "GenerativeTransformer" else 0.0,
                            remove_nan=True, action_patterns=getattr(config, 'action_patterns', None),
                            enable_action_filter=getattr(config, 'enable_action_filter', False), activity_flag=config.activity_flag,
-                           min_sequence_length=getattr(config, 'min_sequence_length', -1))
+                           min_sequence_length=getattr(config, 'min_sequence_length', -1), use_synthetic_data=config.use_synthetic_data,
+                           synthetic_data_prob=config.synthetic_data_prob, synthetic_log_id=config.synthetic_log_id)
 
-    sequence_kwargs['min_sequence_length'] = 500
+    # sequence_kwargs['min_sequence_length'] = 500
 
     dataset = SequenceDataset(mode='train', **sequence_kwargs)
 

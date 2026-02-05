@@ -44,7 +44,7 @@ def validate(model: nn.Module, dataloader: DataLoader, label_names: List[str], d
         reconstruction_method: 'only_first' 或 'average'
     """
     model.eval()
-    criterion = get_loss_function(config)
+    criterion = get_criterion(config)
 
     total_loss = 0.0
     num_batches = 0
@@ -302,7 +302,8 @@ def main():
                                start_token_value=config.start_token_value if config.model_type == "GenerativeTransformer" else 0.0,
                                remove_nan=True, action_patterns=getattr(config, 'action_patterns', None),
                                enable_action_filter=getattr(config, 'enable_action_filter', False), activity_flag=config.activity_flag,
-                               min_sequence_length=getattr(config, 'min_sequence_length', -1))
+                               min_sequence_length=getattr(config, 'min_sequence_length', -1), use_synthetic_data=config.use_synthetic_data,
+                               synthetic_data_prob=config.synthetic_data_prob, synthetic_log_id=config.synthetic_log_id)
 
         train_dataset = SequenceDataset(mode='train', **sequence_kwargs)
 

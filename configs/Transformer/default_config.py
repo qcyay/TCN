@@ -39,7 +39,7 @@ input_names = [
 # ==================== 序列长度过滤配置 ====================
 # 允许加载的最小序列长度（单位：采样点，200Hz，每点=5ms）
 # -1 表示不限制序列长度（默认行为）
-min_sequence_length = -1
+min_sequence_length = 500
 
 # ==================== 特征选择配置 ====================
 # 是否启用特征选择（False时使用所有特征）
@@ -196,6 +196,11 @@ scale = torch.tensor([
     [5.3170e+00], [2.7279e+01], [6.0311e+01], [2.7828e+01], [1.0717e+02]
 ], dtype=torch.float32)
 
+# 虚拟数据加载配置
+use_synthetic_data = True       # 是否启用
+synthetic_data_prob = 0.5       # 使用概率
+synthetic_log_id = 0            # log编号
+
 # ==================== TCN专用配置 ====================
 
 # TCN每层的通道数
@@ -315,7 +320,7 @@ train_batch_ratio = 0.4
 # - 'l1': L1Loss (MAE, 平均绝对误差) - 对异常值不敏感
 # - 'l2': MSELoss (均方误差) - 标准损失函数
 # - 'huber': Huber Loss - 结合L1和L2的优点，对异常值鲁棒
-loss_function = 'l1'
+loss_function = 'l2'
 
 # Huber Loss的delta参数（仅在loss_function='huber'时生效）
 # delta值越小，越接近L1；越大，越接近L2

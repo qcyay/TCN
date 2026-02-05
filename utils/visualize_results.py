@@ -10,9 +10,12 @@ import torch
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")  # 无需显示器的后端
+from matplotlib import rcParams
 import matplotlib.pyplot as plt
 from typing import Dict, List, Optional, Tuple
 
+rcParams['font.sans-serif'] = ['SimHei']   # 黑体（Windows 基本都有）
+rcParams['axes.unicode_minus'] = False     # 解决负号显示问题
 
 def load_test_results(pt_path: str):
     """
@@ -65,13 +68,19 @@ def visualize_trial(
 
     for i in range(num_outputs):
         ax = axes[i]
-        ax.plot(time, lbl[i, :], 'b-', label='Ground Truth', linewidth=1.5)
-        ax.plot(time, est[i, :], 'r--', label='Prediction', linewidth=1.5, alpha=0.7)
+        # ax.plot(time, lbl[i, :], 'b-', label='Ground Truth', linewidth=1.5)
+        # ax.plot(time, est[i, :], 'r--', label='Prediction', linewidth=1.5, alpha=0.7)
+        ax.plot(time, lbl[i, :], 'b-', label='真值', linewidth=1.5)
+        ax.plot(time, est[i, :], 'r--', label='预测值', linewidth=1.5, alpha=0.7)
 
-        ax.set_xlabel('Time (s)', fontsize=12)
-        ax.set_ylabel('Moment (Nm/kg)', fontsize=12)
-        ax.set_title(f'{joint_names[i] if i < len(joint_names) else f"Joint {i}"} - {trial_name}',
-                     fontsize=14, fontweight='bold')
+        # ax.set_xlabel('Time (s)', fontsize=12)
+        # ax.set_ylabel('Moment (Nm/kg)', fontsize=12)
+        # ax.set_title(f'{joint_names[i] if i < len(joint_names) else f"Joint {i}"} - {trial_name}',
+        #              fontsize=14, fontweight='bold')
+        ax.set_xlabel('时间 (秒)', fontsize=12)
+        ax.set_ylabel('力矩 (牛米/千克)', fontsize=12)
+        ax.set_title(f'上楼', fontsize=14, fontweight='bold')
+
         ax.legend(loc='best')
         ax.grid(True, alpha=0.3)
 
@@ -208,7 +217,8 @@ def plot_metrics_boxplots(
 
     label_names = list(all_category_metrics[0]['All'].keys())
     metric_names = ['rmse', 'r2', 'mae_percent']
-    metric_display_names = {'rmse': 'RMSE', 'r2': 'R²', 'mae_percent': 'MAE (%)'}
+    # metric_display_names = {'rmse': 'RMSE', 'r2': 'R²', 'mae_percent': 'MAE (%)'}
+    metric_display_names = {'rmse': '均方根误差', 'r2': '决定系数', 'mae_percent': '归一化平均绝对误差 (%)'}
 
     # 定义颜色方案（最多支持10个pt文件）
     colors = plt.cm.tab10(np.linspace(0, 1, 10))
@@ -293,6 +303,8 @@ def plot_metrics_boxplots(
                         category_labels.append(category)
                         current_pos += n_boxes + 0.5
 
+                category_labels = ['所有活动','周期性活动','阻抗式活动','非结构化活动','未见活动']
+
                 ax.set_xticks(category_positions)
                 ax.set_xticklabels(category_labels, fontsize=11)
 
@@ -308,8 +320,10 @@ def plot_metrics_boxplots(
 
             # 设置标题和标签
             ax.set_ylabel(metric_display_names[metric_name], fontsize=12, fontweight='bold')
-            ax.set_title(f'{label_name} - {metric_display_names[metric_name]}',
-                        fontsize=14, fontweight='bold')
+            # ax.set_title(f'{label_name} - {metric_display_names[metric_name]}',
+            #             fontsize=14, fontweight='bold')
+            ax.set_title(f'关节力矩 - {metric_display_names[metric_name]}',
+                         fontsize=14, fontweight='bold')
             ax.grid(True, axis='y', alpha=0.3)
 
             # 设置y轴范围（R²特殊处理）
