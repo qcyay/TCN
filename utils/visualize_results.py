@@ -53,46 +53,85 @@ def visualize_trial(
         trial_idx: 要可视化的试验序号
         save_path: 保存路径（可选）
     """
+
+    base_dir = os.path.dirname(save_path)
+    base_name = os.path.splitext(os.path.basename(save_path))[0]
+    vis_dir = 'visualization'
+
+    os.makedirs(os.path.join(base_dir, vis_dir), exist_ok=True)
+
+    # 全局风格（可放到函数外）
+    plt.rcParams['font.family'] = 'Times New Roman'
+    plt.rcParams['font.size'] = 11
+    plt.rcParams['axes.linewidth'] = 0.8
+
     est = all_estimates[trial_idx].cpu().numpy()  # [num_outputs, N]
     lbl = all_labels[trial_idx].cpu().numpy()  # [num_outputs, N]
     trial_name = trial_names[trial_idx]
 
+    print(est.shape, lbl.shape)
+    # # TCN
+    # est = est[:, 600:]
+    # lbl = lbl[:, 600:]
+    # Transformer
+    est = est[:, 648:]
+    lbl = lbl[:, 648:]
+
     num_outputs, seq_len = est.shape
     time = np.arange(seq_len) * 0.005  # 假设200Hz采样率
 
-    fig, axes = plt.subplots(num_outputs, 1, figsize=(12, 4 * num_outputs))
-    if num_outputs == 1:
-        axes = [axes]
+    # fig, axes = plt.subplots(num_outputs, 1, figsize=(10, 3.0 * num_outputs), sharex=True)
+    # if num_outputs == 1:
+    #     axes = [axes]
 
-    joint_names = ['Hip', 'Knee', 'Ankle']  # 根据实际情况修改
+    joint_names = ['Hip', 'Knee']  # 根据实际情况修改
 
     for i in range(num_outputs):
-        ax = axes[i]
-        # ax.plot(time, lbl[i, :], 'b-', label='Ground Truth', linewidth=1.5)
-        # ax.plot(time, est[i, :], 'r--', label='Prediction', linewidth=1.5, alpha=0.7)
-        ax.plot(time, lbl[i, :], 'b-', label='真值', linewidth=1.5)
-        ax.plot(time, est[i, :], 'r--', label='预测值', linewidth=1.5, alpha=0.7)
+        # ax = axes[i]
+        # 每个输出单独创建一张图
+        fig, ax = plt.subplots(figsize=(6, 3.2))
 
-        # ax.set_xlabel('Time (s)', fontsize=12)
-        # ax.set_ylabel('Moment (Nm/kg)', fontsize=12)
+        ax.plot(time, lbl[i, :], color='black', linewidth=1.8)
+        ax.plot(time, est[i, :], color=(39/255,170/255,226/255), linewidth=1.6)
+        # ax.plot(time, lbl[i, :], 'b-', label='真值', linewidth=1.5)
+        # ax.plot(time, est[i, :], 'r--', label='预测值', linewidth=1.5, alpha=0.7)
+
+        ax.set_xlabel('Time (s)', fontsize=20)
+        ax.set_ylabel('Moment (Nm/kg)', fontsize=20)
+        # ax.set_title(f'Upstairs', fontsize=14, fontweight='normal', pad=4)
         # ax.set_title(f'{joint_names[i] if i < len(joint_names) else f"Joint {i}"} - {trial_name}',
         #              fontsize=14, fontweight='bold')
-        ax.set_xlabel('时间 (秒)', fontsize=12)
-        ax.set_ylabel('力矩 (牛米/千克)', fontsize=12)
-        ax.set_title(f'上楼', fontsize=14, fontweight='bold')
+        # ax.set_xlabel('时间 (秒)', fontsize=12)
+        # ax.set_ylabel('力矩 (牛米/千克)', fontsize=12)
+        # ax.set_title(f'上楼', fontsize=14, fontweight='bold')
 
-        ax.legend(loc='best')
-        ax.grid(True, alpha=0.3)
+        # ax.legend(loc='best')
+        # ax.grid(True, alpha=0.3)
+        # 取消网格线
+        ax.grid(False)
 
-    plt.tight_layout()
+        # 只保留左边和下边坐标轴线
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.spines['left'].set_linewidth(0.8)
+        ax.spines['bottom'].set_linewidth(0.8)
 
-    if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"图片已保存: {save_path}")
-    else:
-        plt.show()
+        # 刻度样式
+        ax.tick_params(axis='both', which='major', labelsize=16, width=0.8, length=4)
 
-    plt.close()
+        plt.tight_layout()
+
+        if save_path:
+            png_save_path = os.path.join(base_dir, vis_dir, f'{base_name}_{joint_names[i]}.png')
+            pdf_save_path = os.path.join(base_dir, vis_dir, f'{base_name}_{joint_names[i]}.pdf')
+            plt.savefig(png_save_path, dpi=300, bbox_inches='tight')
+            plt.savefig(pdf_save_path, bbox_inches='tight')
+            print(f"图片已保存: {png_save_path}")
+            print(f"图片已保存: {pdf_save_path}")
+        else:
+            plt.show()
+
+        plt.close()
 
 
 def save_metrics_summary(
@@ -346,6 +385,8 @@ def main():
                         help='测试结果.pt文件路径（可以指定多个）')
     parser.add_argument('--trial_idx', type=int, default=None,
                         help='要可视化的试验序号')
+    parser.add_argument('--model_name', type=str, default=None, choices=['tcn', 'transformer'],
+                        help='模型类型，可选: tcn 或 transformer')
     parser.add_argument('--save_summary', action='store_true',
                         help='是否保存指标摘要')
     parser.add_argument('--save_metrics_plots', action='store_true',
@@ -373,7 +414,10 @@ def main():
         # 可视化指定试验
         if args.trial_idx is not None:
             if 0 <= args.trial_idx < len(trial_names):
-                save_path = os.path.join(output_dir, f'visualization_trial_{args.trial_idx}.png')
+                if args.model_name:
+                    save_path = os.path.join(output_dir, f'visualization_trial_{args.trial_idx}_{args.model_name}.png')
+                else:
+                    save_path = os.path.join(output_dir, f'visualization_trial_{args.trial_idx}.png')
                 visualize_trial(all_estimates, all_labels, trial_names, args.trial_idx, save_path)
             else:
                 print(f"错误: trial_idx {args.trial_idx} 超出范围 [0, {len(trial_names) - 1}]")

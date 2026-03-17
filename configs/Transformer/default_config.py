@@ -9,7 +9,7 @@ model_type = 'Transformer'
 # ==================== 数据配置 ====================
 
 # 相对路径:训练好的模型保存位置
-model_path = os.path.join("logs", "trained_model.tar")
+model_path = os.path.join("logs", "trained_transformer_default_config", "9", "best_model.tar")
 
 # 相对路径:数据目录
 data_dir = 'data'
@@ -199,7 +199,7 @@ scale = torch.tensor([
 # 虚拟数据加载配置
 use_synthetic_data = True       # 是否启用
 synthetic_data_prob = 0.5       # 使用概率
-synthetic_log_id = 0            # log编号
+synthetic_log_id = 1            # log编号
 
 # ==================== TCN专用配置 ====================
 
@@ -244,7 +244,7 @@ nhead = 4
 num_encoder_layers = 3
 
 # 前馈网络维度
-dim_feedforward = 256
+dim_feedforward = 512
 
 # Transformer的dropout
 transformer_dropout = 0.1

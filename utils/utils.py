@@ -123,15 +123,15 @@ ACTION_TO_CATEGORY = {
 
 # 训练集中未见过的任务（用于单独评估）
 UNSEEN_ACTION_PATTERNS = [
-    r"^lunges_.*",  # Lunge
-    r"^stairs_.*up.*",  # Stair ascent
-    r"^incline_walk_.*down.*",  # Declined walk
-    r"^start_stop_.*",  # Start and stop
-    r"^ball_toss_.*",  # Medicine ball toss
-    r"^obstacle_walk_.*",  # Step over
-    r"^squats_.*",  # Squat
-    r"^curb_.*",  # Curb
-    r"^step_ups_.*",  # Step up
+    # r"^lunges_.*",  # Lunge
+    # r"^stairs_.*up.*",  # Stair ascent
+    # r"^incline_walk_.*down.*",  # Declined walk
+    # r"^start_stop_.*",  # Start and stop
+    # r"^ball_toss_.*",  # Medicine ball toss
+    # r"^obstacle_walk_.*",  # Step over
+    # r"^squats_.*",  # Squat
+    # r"^curb_.*",  # Curb
+    # r"^step_ups_.*",  # Step up
 ]
 
 class EarlyStopping:
